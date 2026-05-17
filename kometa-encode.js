@@ -70,6 +70,20 @@ function bitsToMessage(bits) {
 }
 
 // ─────────────────────────────────────────────
+// One time pad helpers
+// ─────────────────────────────────────────────
+function otpBase64(bytes = 32) {
+  const arr = new Uint8Array(bytes);
+  crypto.getRandomValues(arr);
+  return btoa(String.fromCharCode(...arr));
+}
+
+function applyOTP(messageBytes, otpBase64) {
+  const padBytes = Uint8Array.from(atob(otpBase64), c => c.charCodeAt(0));
+  return messageBytes.map((byte, i) => byte ^ padBytes[i]);
+}
+
+// ─────────────────────────────────────────────
 // Encoding scheme
 //
 // Each alpha carrier position has three states:
