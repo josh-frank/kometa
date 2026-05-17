@@ -61,7 +61,7 @@ plaintext payload
  (1.58 bits/carrier)               (1 bit/carrier)
       │                                 │
       ▼                                 ▼
-KOMETAXPBHop positions           S I J positions
+KOMETAXPBHop positions           I J positions
 triad substitution               binary substitution
 Latin / Cyrillic / Greek         Latin / Serbian Cyrillic
       │                                 │
@@ -186,8 +186,8 @@ const alpha = {
 
 // Channel β — binary (Latin / Serbian Cyrillic)
 const beta = {
-  lat: "SIJ",
-  cyr: "ЅІЈ",
+  lat: "IJ",
+  cyr: "ІЈ",
 };
 ```
 
@@ -213,3 +213,17 @@ Pre-implementation. Architecture and encoding scheme defined. Dictionary validat
 ## License
 
 TBD
+
+<!-- Original dictionary
+const dictionary = {
+  alpha: {
+    lat: "KOMETAXPBHop", // Latin
+    cyr: "КОМЕТАХРВНор", // Cyrillic
+    ell: "ΚΟΜΕΤΑΧΡΒΗορ", // Greek
+  },
+  beta: {
+    lat: "IJij",
+    cyr: "ІЈіј",
+  },
+};
+ -->
