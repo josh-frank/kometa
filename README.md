@@ -1,4 +1,4 @@
-# `steg` — Homoglyph Steganography Suite
+# `kometa` — Homoglyph Steganography Suite
 
 A covert multi-channel text steganography system using Unicode homoglyphs and one-time pad encryption. Hides encrypted payloads inside ordinary plaintext documents with no anomalous network signature, no zero-width characters, and neurological invisibility to human readers.
 
@@ -35,12 +35,12 @@ Each carrier character has three possible states — Latin, Cyrillic, or Greek. 
 
 **Channel β — Binary Channel**
 ```
-Carriers:  S I J
-Scripts:   Latin / Serbian Cyrillic  (Ѕ І Ј)
+Carriers:  I J
+Scripts:   Latin / Serbian Cyrillic  (І Ј)
 Encoding:  binary (1 bit per carrier position)
 ```
 
-Serbian Cyrillic provides visually identical equivalents for S, I, and J. Greek has no clean equivalents for these, so this channel is strictly binary. S and I are among the most frequent letters in English, giving this channel significant capacity despite being single-bit.
+Serbian Cyrillic provides visually identical equivalents for I, and J. Greek has no clean equivalents for these, so this channel is strictly binary. I is among the most frequent letters in English, giving this channel significant capacity despite being single-bit.
 
 The two channels carry **independent payloads encrypted with independent OTP pads**. An adversary who finds and fully compromises channel α has no indication channel β exists.
 
@@ -119,21 +119,21 @@ Approximate capacity in typical English prose:
 
 ## Planned Components
 
-### `steg-encode` / `steg-decode`
-Core CLI tools. Embed a payload into a cover text file; extract and decrypt a payload from a steg document. Accepts piped input. Explicit pad file and offset tracking.
+### `kometa-encode` / `kometa-decode`
+Core CLI tools. Embed a payload into a cover text file; extract and decrypt a payload from a `kometa` document. Accepts piped input. Explicit pad file and offset tracking.
 
-### `steg-edit`
+### `kometa-edit`
 Interactive editor modelled on `nano`. Split-pane view: rendered cover text on the left, annotated carrier map on the right showing which positions carry bits and current payload density. Real-time capacity warning as you type.
 
-### `steg-analyze`
+### `kometa-analyze`
 Two modes:
 - **Own-document mode:** Given a pad, fully decode the document and report payload, density map, and pad consumption.
 - **Adversarial mode:** Without a pad, detect substitution presence, measure carrier density anomalies, report a suspicion score. Use this to red-team your own documents before transmission.
 
-### `steg-pad`
+### `kometa-pad`
 First-class pad management. Generates pads via CSPRNG, tracks consumption state, enforces non-reuse, supports secure destruction. Pad state is persisted with a random pad ID and checksum to detect substitution attacks on the state file.
 
-### `steg-test`
+### `kometa-test`
 - Roundtrip fuzz tester: encode random payloads, decode, verify bit-perfect recovery
 - Capacity benchmark across a corpus of cover texts
 - Renderer compatibility matrix: does the substitution survive Gmail, Slack, Signal, Google Docs, iMessage?
