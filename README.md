@@ -9,9 +9,9 @@ A covert multi-channel text steganography system using Unicode homoglyphs and on
 Certain characters across Latin, Cyrillic, and Greek scripts are visually identical at the glyph level but occupy different Unicode code points:
 
 ```
-Latin    K  O  M  E  T  A  X  P  B  H  o  p
-Cyrillic К  О  М  Е  Т  А  Х  Р  В  Н  о  р
-Greek    Κ  Ο  Μ  Ε  Τ  Α  Χ  Ρ  Β  Η  ο  ρ
+Latin    K  O  M  E  T  A  X  P  H  o
+Cyrillic К  О  М  Е  Т  А  Х  Р  Н  о
+Greek    Κ  Ο  Μ  Ε  Τ  Α  Χ  Ρ  Η  ο
 ```
 
 A document containing these characters can have any of them silently substituted. The result is indistinguishable from the original to a human reader. Which substitution is made — or whether any is made at all — encodes a payload bit stream. That bit stream is encrypted with a one-time pad before embedding, making the extracted ciphertext information-theoretically unbreakable without the pad.
@@ -26,7 +26,7 @@ The suite operates two orthogonal steganographic channels simultaneously in the 
 
 **Channel α — Triad Channel**
 ```
-Carriers:  K O M E T A X P B H o p
+Carriers:  K O M E T A X P H o
 Scripts:   Latin / Cyrillic / Greek
 Encoding:  ternary (log₂3 ≈ 1.58 bits per carrier position)
 ```
@@ -192,6 +192,45 @@ const beta = {
 ```
 
 These twelve uppercase and two lowercase characters are the complete set satisfying strict three-way visual symmetry across Latin, Cyrillic, and Greek. Other scripts (Lisu, Coptic, Cherokee) contain partial matches but fail visual inspection at second glance. Serbian/Ukrainian Cyrillic extends the set for a binary-only channel. This asymmetry — the triad set and the binary set — is a feature, not a limitation: it produces two independent channels naturally.
+
+---
+
+## Potential uses for the β channel
+
+A much more elegant use of the beta channel, instead of carrying an independent payload, is to make it part of the cryptographic infrastructure for channel α. A few ways this could work:
+
+**Salt/IV embedding**
+The I/J positions encode a random salt that was XORed into the alpha channel before embedding. Receiver extracts the salt from β first, then uses it to de-salt α before OTP decryption. This means even if someone has the α pad, they can't decode without also knowing the β encoding — adds a second factor naturally.
+
+**Carrier selection mask**
+β bits determine *which* α carrier positions are active vs. decoy. Some triad positions carry real payload trits, others are randomized noise. The β bitstream is the mask that tells the receiver which positions to read. An adversary seeing the α channel sees a valid-looking triad distribution with no obvious signal — because half the positions are intentional noise.
+
+**Commitment / integrity check**
+β encodes a short checksum or HMAC over the α payload. Decoding succeeds only if β verifies. Detects document tampering, normalization damage, or copy-paste corruption — which is actually your biggest operational risk.
+
+The **carrier selection mask** idea feels most synergistic — it directly addresses the "uniform carrier density looks suspicious" problem, since decoy positions can be randomized to mimic natural script variation.
+
+---
+
+## Bugs
+
+**1. The decode termination logic is wrong for encrypted payloads.**
+
+```js
+if (info.setName === "lat") break;  // ← this is the problem
+```
+
+This made sense when payload bits might naturally run out and you flip remaining carriers to Latin. But after OTP encryption, the length header bytes themselves are encrypted — so the first carrier the encoder touches is *always* either Cyr or Greek (never Latin), and you never hit an early-Latin until the payload is done. That part is fine.
+
+The real problem: if the OTP produces a `0x00` byte anywhere in the encrypted length header, `bitsToMessage` will read `length = 0` and return an empty string even though more bits follow. The decoder won't break early (no Latin encountered yet), but it will reconstruct the wrong length and silently return garbage. The fix: validate the decoded length against the actual number of bits available.
+
+**2. `messageToBits` uses `charCodeAt(0)` which only handles ASCII (0–127).**
+
+If your message or — more importantly — the OTP-encrypted bytes produce values > 127, `charCodeAt` still returns the right value (0–255 for Latin-1), but `String.fromCharCode` in `bitsToMessage`'s reverse path is also fine for that range. So this actually works up to 255. However, if you ever move to proper Unicode messages, this breaks. Worth flagging now even if it's not a current bug.
+
+**3. `otpGenerate` pad length = message bytes, but the length header adds 2 bytes.**
+
+The smoke test calls `otpGenerate(secret.length)` — but the thing being OTP-encrypted is `messageBytes` (the raw message), not the length-prefixed bitstream. The length header is added *after* encryption in `messageToBits`. So the pad size is correct for the current code. But this is a subtle invariant that's easy to break if someone refactors — worth a comment.
 
 ---
 

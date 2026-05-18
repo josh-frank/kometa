@@ -19,6 +19,20 @@ const dictionary = {
 };
 
 // ─────────────────────────────────────────────
+// Pad layout
+//
+// Bytes 0–7  : carrier selection seed (xoshiro128** input)
+// Bytes 8–N  : OTP key material for message encryption
+//
+// otpGenerate() always produces a block-aligned pad (multiple of 64
+// bytes) so pad size does not leak message length to an observer of
+// the pad file.
+// ─────────────────────────────────────────────
+
+const SEED_BYTES = 8;
+const BLOCK_SIZE = 64;
+
+// ─────────────────────────────────────────────
 // Lookup table helpers
 // ─────────────────────────────────────────────
 
@@ -73,23 +87,82 @@ const bitsToMessage = bits => {
 // ─────────────────────────────────────────────
 
 // Generate a cryptographically random OTP pad, base64-encoded.
-// bytes should equal the message length in bytes.
-const otpGenerate = (bytes = 32) => {
-  const arr = new Uint8Array(bytes);
+// Pad is always a multiple of BLOCK_SIZE bytes — pad size does not
+// leak message length. First SEED_BYTES are the carrier selection
+// seed; remaining bytes are OTP key material.
+const otpGenerate = (messageBytes = 32) => {
+  const needed = messageBytes + SEED_BYTES;
+  const total = Math.ceil(needed / BLOCK_SIZE) * BLOCK_SIZE;
+  const arr = new Uint8Array(total);
   crypto.getRandomValues(arr);
   return btoa(String.fromCharCode(...arr));
 };
 
-// XOR message bytes against a base64-encoded pad.
-// Returns a new Uint8Array of the same length.
+// XOR message bytes against the OTP region of a base64-encoded pad.
+// OTP region starts at SEED_BYTES (bytes 0–7 are the selection seed).
+// Returns a new Uint8Array of the same length as messageBytes.
 const otpApply = (messageBytes, padBase64) => {
   const padBytes = Uint8Array.from(atob(padBase64), c => c.charCodeAt(0));
-  if (padBytes.length < messageBytes.length)
+  const otpSlice = padBytes.slice(SEED_BYTES);
+  if (otpSlice.length < messageBytes.length)
     throw new Error(
-      `OTP pad too short: need ${messageBytes.length} bytes, got ${padBytes.length}`,
+      `OTP pad too short: need ${messageBytes.length} bytes of key material, ` +
+        `got ${otpSlice.length} (pad total ${padBytes.length})`,
     );
-  return messageBytes.map((byte, i) => byte ^ padBytes[i]);
+  return messageBytes.map((byte, i) => byte ^ otpSlice[i]);
 };
+
+// ─────────────────────────────────────────────
+// Keyed carrier selection
+//
+// Active carrier positions are chosen by a Fisher-Yates shuffle of
+// all carrier positions in the document, seeded from the first
+// SEED_BYTES of the pad. Encoder and decoder reconstruct the same
+// shuffle independently — no extra signalling required.
+//
+// Benefits vs. sequential fill:
+//   • Bits are distributed across the full document — no density
+//     cliff or front-loading visible to a casual observer.
+//   • Without the pad an adversary reads bits from the wrong
+//     positions in the wrong order: output is noise even with the
+//     OTP key. Position knowledge and pad are both required.
+// ─────────────────────────────────────────────
+
+// xoshiro128** — fast, seedable, deterministic PRNG.
+const _rotl = (x, k) => ((x << k) | (x >>> (32 - k))) >>> 0;
+
+const makeRng = (seedBytes) /* Uint8Array, len >= SEED_BYTES */ => {
+  const view = new DataView(seedBytes.buffer, seedBytes.byteOffset, SEED_BYTES);
+  let s0 = view.getUint32(0, true) | 1; // ensure non-zero state
+  let s1 = view.getUint32(4, true) | 1;
+  let s2 = 0x9e3779b9;
+  let s3 = 0x6c62272e;
+  return () => {
+    const result = Math.imul(_rotl(Math.imul(s1, 5), 7), 9) >>> 0;
+    const t = (s1 << 9) >>> 0;
+    s2 = (s2 ^ s0) >>> 0;
+    s3 = (s3 ^ s1) >>> 0;
+    s1 = (s1 ^ s2) >>> 0;
+    s0 = (s0 ^ s3) >>> 0;
+    s2 = (s2 ^ t) >>> 0;
+    s3 = _rotl(s3, 11);
+    return result;
+  };
+};
+
+// Fisher-Yates shuffle driven by a makeRng() PRNG.
+const fisherYates = (arr, rng) => {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = rng() % (i + 1);
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
+// Extract the selection seed from a pad (non-destructive read).
+const selectionSeed = padBase64 =>
+  Uint8Array.from(atob(padBase64), c => c.charCodeAt(0)).slice(0, SEED_BYTES);
 
 // ─────────────────────────────────────────────
 // File I/O helpers
@@ -115,21 +188,21 @@ const destroyPad = filePath => {
 // ─────────────────────────────────────────────
 // Encoding scheme
 //
-// Each alpha carrier position has three states:
-//   Latin    → carrier is "off" (no bit)
-//   Cyrillic → bit = 0
-//   Greek    → bit = 1
+// Carrier characters (KOMETAXPHo / homoglyphs) are collected from
+// the cover text and their positions shuffled via a pad-seeded PRNG.
+// The first N positions in shuffled order are "active" and carry
+// payload bits; all others are written as Latin (neutral/inactive).
 //
-// Latin is the neutral/unflipped state. Only Cyr/Ell carry bits.
-// Remaining carriers after payload stay Latin — decoder stops at
-// the first Latin carrier it encounters.
+//   Active carrier → Cyrillic = bit 0, Greek = bit 1
+//   Inactive carrier → Latin  (no information)
 //
-// OTP layer: message bytes are XORed with pad before embedding.
-// Without the pad, extracted bits are indistinguishable from noise.
+// OTP layer: message bytes are XORed with pad key material before
+// embedding. Without the pad, neither bit values nor active positions
+// are recoverable.
 // ─────────────────────────────────────────────
 
-// Encode message into cover text using OTP encryption.
-// All arguments are file paths.
+// Encode message into cover text using OTP encryption + keyed carrier
+// selection. All arguments are file paths.
 // Writes encoded output to <coverFile>.out
 const encode = (coverFile, messageFile, padFile) => {
   const plaintext = readText(coverFile);
@@ -146,57 +219,82 @@ const encode = (coverFile, messageFile, padFile) => {
   const bits = messageToBits(encryptedStr);
 
   const alphaLookup = buildLookupTableFrom(dictionary.alpha);
-  let bitIndex = 0;
-  let result = "";
 
-  for (const char of plaintext) {
-    const info = alphaLookup.get(char);
+  // Collect all carrier positions in document order
+  const carrierPositions = [];
+  for (let i = 0; i < plaintext.length; i++)
+    if (alphaLookup.has(plaintext[i])) carrierPositions.push(i);
 
-    if (!info) {
-      result += char;
+  if (carrierPositions.length < bits.length)
+    throw new Error(
+      `Insufficient carrier capacity: needed ${bits.length} bits, ` +
+        `only ${carrierPositions.length} positions available in cover text`,
+    );
+
+  // Shuffle all carrier positions, then take the first bits.length as active
+  const rng = makeRng(selectionSeed(pad));
+  const shuffled = fisherYates(carrierPositions, rng);
+  const activeMap = new Map();
+  for (let i = 0; i < bits.length; i++) activeMap.set(shuffled[i], bits[i]);
+
+  // Write output: active → Cyr/Greek, inactive → Latin
+  const chars = [...plaintext];
+  for (let i = 0; i < chars.length; i++) {
+    const info = alphaLookup.get(chars[i]);
+    if (!info) continue;
+    if (!activeMap.has(i)) {
+      chars[i] = dictionary.alpha.lat[info.index]; // inactive — stays Latin
       continue;
     }
-
-    if (bitIndex >= bits.length) {
-      result += dictionary.alpha.lat[info.index];
-      continue;
-    }
-
-    const bit = bits[bitIndex++];
-    result +=
-      bit === 0
+    chars[i] =
+      activeMap.get(i) === 0
         ? dictionary.alpha.cyr[info.index]
         : dictionary.alpha.ell[info.index];
   }
 
-  if (bitIndex < bits.length)
-    throw new Error(
-      `Insufficient carrier capacity: needed ${bits.length} bits, ` +
-        `only ${bitIndex} positions available in cover text`,
-    );
-
   const outPath = coverFile + ".out";
-  writeText(outPath, result);
+  writeText(outPath, chars.join(""));
   console.log(`✓ Encoded → ${outPath}`);
   return outPath;
 };
 
 // Decode a steganographic file back to the hidden message.
 // Writes plaintext output to <encodedFile>.decoded
-// pad is consumed (destroyed) after successful decode.
+// Pad is consumed (destroyed) after successful decode.
 const decode = (encodedFile, padFile) => {
   const encoded = readText(encodedFile);
   const pad = readText(padFile);
 
   const alphaLookup = buildLookupTableFrom(dictionary.alpha);
-  const bits = [];
 
-  for (const char of encoded) {
-    const info = alphaLookup.get(char);
+  // Collect all carrier positions and their observed script
+  const carrierPositions = [];
+  const observedBits = new Map(); // position → bit (Latin positions absent = inactive)
+  for (let i = 0; i < encoded.length; i++) {
+    const info = alphaLookup.get(encoded[i]);
     if (!info) continue;
-    if (info.setName === "lat") break;
-    bits.push(info.setName === "cyr" ? 0 : 1);
+    carrierPositions.push(i);
+    if (info.setName !== "lat")
+      observedBits.set(i, info.setName === "cyr" ? 0 : 1);
   }
+
+  // Reconstruct identical shuffle from same pad seed
+  const rng = makeRng(selectionSeed(pad));
+  const shuffled = fisherYates(carrierPositions, rng);
+
+  // Helper: read bit i from the shuffled active sequence
+  const readBit = i => observedBits.get(shuffled[i]) ?? 0;
+  const readByte = offset => {
+    let val = 0;
+    for (let b = 0; b < 8; b++) val = (val << 1) | readBit(offset + b);
+    return val;
+  };
+
+  // Decode 16-bit length header, then read full payload
+  const payloadBytes = (readByte(0) << 8) | readByte(8);
+  const totalBits = 16 + payloadBytes * 8;
+  const bits = [];
+  for (let i = 0; i < totalBits; i++) bits.push(readBit(i));
 
   const encryptedStr = bitsToMessage(bits);
   const encryptedBytes = Uint8Array.from(
@@ -224,9 +322,12 @@ module.exports = {
   bitsToMessage,
   otpGenerate,
   otpApply,
+  makeRng,
+  fisherYates,
+  selectionSeed,
   readText,
   writeText,
   destroyPad,
   encode,
   decode,
-}
+};
