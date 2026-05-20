@@ -14,88 +14,138 @@ Cyrillic К  О  М  Е  Т  А  Х  Р  Н  о
 Greek    Κ  Ο  Μ  Ε  Τ  Α  Χ  Ρ  Η  ο
 ```
 
-A document containing these characters can have any of them silently substituted. The result is indistinguishable from the original to a human reader. Which substitution is made — or whether any is made at all — encodes a payload bit stream. That bit stream is encrypted with a one-time pad before embedding, making the extracted ciphertext information-theoretically unbreakable without the pad.
+A document containing these characters can have any of them silently substituted. The result is indistinguishable from the original to a human reader. The scheme uses this as follows:
+
+- **Latin** — carrier position is inactive; carries no information
+- **Cyrillic** — active carrier position encoding bit **0**
+- **Greek** — active carrier position encoding bit **1**
+
+Not every carrier position in the document is used. Which positions are active, and the order in which they are read, is determined by a Fisher-Yates shuffle seeded from the first 8 bytes of the OTP pad. The remaining pad bytes XOR the message before embedding, making the ciphertext information-theoretically unbreakable without the pad. Both the position seed and the OTP key material live in the same pad file — one secret, two layers of protection.
 
 ---
 
 ## Architecture
 
-### Two Independent Channels
+### Channel α — current implementation
 
-The suite operates two orthogonal steganographic channels simultaneously in the same cover document:
-
-**Channel α — Triad Channel**
 ```
 Carriers:  K O M E T A X P H o
 Scripts:   Latin / Cyrillic / Greek
-Encoding:  ternary (log₂3 ≈ 1.58 bits per carrier position)
+Encoding:  binary (1 bit per active carrier position)
 ```
 
-Each carrier character has three possible states — Latin, Cyrillic, or Greek. The choice encodes ~1.58 bits per position. In normal English prose these twelve characters appear frequently enough to provide meaningful payload capacity.
+Each carrier character has three possible states — Latin, Cyrillic, or Greek — but the current encoding uses only two of them to carry payload bits:
 
-**Channel β — Binary Channel**
 ```
-Carriers:  I J
-Scripts:   Latin / Serbian Cyrillic  (І Ј)
-Encoding:  binary (1 bit per carrier position)
+Active carrier, bit 0  →  Cyrillic  (К О М Е Т А Х Р Н о)
+Active carrier, bit 1  →  Greek     (Κ Ο Μ Ε Τ Α Χ Ρ Η ο)
+Inactive carrier       →  Latin     (K O M E T A X P H o)
 ```
 
-Serbian Cyrillic provides visually identical equivalents for I, and J. Greek has no clean equivalents for these, so this channel is strictly binary. I is among the most frequent letters in English, giving this channel significant capacity despite being single-bit.
+Not every carrier position in the document is active. Which positions carry bits — and their read order — is determined by a pad-seeded shuffle (see below). Inactive positions are reset to Latin and carry no information.
 
-The two channels carry **independent payloads encrypted with independent OTP pads**. An adversary who finds and fully compromises channel α has no indication channel β exists.
+### Pad layout
 
-### Encoding Pipeline
+The OTP pad serves a dual purpose. Its bytes are split into two regions:
+
+```
+Bytes 0–7   carrier selection seed   → feeds xoshiro128** PRNG
+Bytes 8–N   OTP key material         → XORed with message bytes
+```
+
+The pad is always generated as a multiple of 64 bytes so its length does not leak the message length.
+
+### Keyed carrier selection
+
+All carrier positions in the cover document are collected in document order, then shuffled by a Fisher-Yates pass driven by the xoshiro128** PRNG seeded from pad bytes 0–7. The first `N` positions in the shuffled order are declared **active** (where `N = bits needed to encode the OTP-encrypted message`). All others are reset to Latin.
+
+Encoder and decoder reconstruct the identical shuffle independently from the same pad — no additional signalling is required.
+
+This has two consequences:
+
+- **Uniform visual distribution.** Active bits are spread across the full document rather than front-loaded, so carrier density is even everywhere.
+- **Position secrecy.** Without the pad, an adversary cannot determine which positions are active or in what order to read them. Even if they extract the correct bits from every carrier position, they read them in the wrong order: the output is noise independent of the OTP layer.
+
+Both the position order and the OTP key are required to recover the message.
+
+### Encoding pipeline
 
 ```
 plaintext payload
       │
       ▼
-  [compress]              ← reduce payload size before encryption
+  [OTP encrypt]                ← XOR message bytes with pad bytes 8–N
       │
       ▼
-  [OTP encrypt]           ← XOR with cryptographically random pad
+  [prepend 16-bit length]      ← length of encrypted payload in bytes
       │
-      ├─────────────────────────────────┐
-      ▼                                 ▼
- bitstream α                       bitstream β
- (1.58 bits/carrier)               (1 bit/carrier)
-      │                                 │
-      ▼                                 ▼
-KOMETAXPBHop positions           I J positions
-triad substitution               binary substitution
-Latin / Cyrillic / Greek         Latin / Serbian Cyrillic
-      │                                 │
-      └──────────────┬──────────────────┘
-                     ▼
-              cover plaintext
-         (visually identical to input)
-                     │
-                     ▼
-              transmit freely
+      ▼
+  [serialize to bitstream]     ← MSB-first, one bit per carrier slot
+      │
+      ▼
+  [keyed carrier selection]    ← Fisher-Yates shuffle seeded from pad bytes 0–7
+      │                           first N positions → active
+      ▼                           remaining positions → Latin (inactive)
+  embed into cover text
+  active pos, bit 0 → Cyrillic
+  active pos, bit 1 → Greek
+  inactive pos      → Latin
+      │
+      ▼
+   output file
+(visually identical to input)
+      │
+      ▼
+  transmit freely
 ```
 
-### Decoding Pipeline
+### Decoding pipeline
 
-Receiver walks the document character by character. At each carrier position:
-- Channel α: Latin → `0x`, Cyrillic → `1x`, Greek → `x1` (or chosen encoding)
-- Channel β: Latin → `0`, Serbian Cyrillic → `1`
+```
+encoded document + pad
+      │
+      ├─ extract pad bytes 0–7 → seed xoshiro128** → reconstruct Fisher-Yates shuffle
+      │
+      ├─ walk document, record all carrier positions and their observed script
+      │    Cyrillic → bit 0
+      │    Greek    → bit 1
+      │    Latin    → inactive (no bit)
+      │
+      ├─ read bits in shuffled order to recover encrypted bitstream
+      │
+      ├─ decode 16-bit length header → know how many payload bytes to read
+      │
+      ├─ XOR encrypted bytes with pad bytes 8–N → plaintext
+      │
+      └─ destroy pad (overwrite + unlink)
+```
 
-Extracted bit streams are XORed with the respective pads to recover plaintext.
+### Channel β — planned
+
+```
+Carriers:  I J i j
+Scripts:   Latin / Serbian Cyrillic  (І Ј і ј)
+Encoding:  binary (1 bit per carrier position)
+```
+
+Serbian Cyrillic provides visually identical equivalents for I, J, i, j. Greek has no clean equivalents for these, so this channel is strictly binary. I is among the most frequent letters in English, giving this channel meaningful capacity. Channel β is architecturally independent of channel α — independent payload, independent pad, no coupling. **Not yet implemented.**
 
 ---
 
 ## Payload Capacity
 
-Approximate capacity in typical English prose:
+Channel α carriers (K O M E T A X P H o) appear in typical English prose at roughly one per 100 characters. The current binary encoding uses 1 bit per active carrier. With a 16-bit length header, usable payload per document length is approximately:
 
-| Document length | Channel α | Channel β | Total |
-|---|---|---|---|
-| 1,000 chars (~1 paragraph) | ~13 bytes | ~1.6 bytes | ~15 bytes |
-| 5,000 chars (~1 page) | ~65 bytes | ~8 bytes | ~73 bytes |
-| 20,000 chars (~1 essay) | ~260 bytes | ~32 bytes | ~292 bytes |
-| 50,000 chars (~short story) | ~650 bytes | ~80 bytes | ~730 bytes |
+| Document length | α carriers available | Usable payload |
+|---|---|---|
+| 1,000 chars (~1 paragraph) | ~100 bits | ~10 bytes |
+| 5,000 chars (~1 page) | ~500 bits | ~60 bytes |
+| 20,000 chars (~1 essay) | ~2,000 bits | ~248 bytes |
+| 50,000 chars (~short story) | ~5,000 bits | ~622 bytes |
 
-730 bytes is sufficient for a 4096-bit RSA public key, a meaningful encrypted message, or an OTP pad for a subsequent shorter message.
+622 bytes is sufficient for a 4096-bit RSA public key, a meaningful encrypted message, or an OTP pad for a subsequent shorter message.
+
+When channel β is implemented, its capacity adds roughly 8–10% on top of these figures (I and J are less frequent than the α set).
 
 ---
 
@@ -103,9 +153,9 @@ Approximate capacity in typical English prose:
 
 **What the OTP provides:** Information-theoretic security on the payload. Without the pad, the extracted bit stream is provably indistinguishable from random noise. This is not computational security — it is mathematically unbreakable regardless of adversary compute power.
 
-**What the homoglyph layer provides:** Covert channel existence deniability against automated scanning. There are no zero-width characters. No anomalous byte sequences. No statistical artifacts visible to standard DLP or Unicode scanners.
+**What the keyed carrier selection provides:** A second independent secret derived from the same pad. The carrier shuffle seed (pad bytes 0–7) determines which positions are active and in what order to read them. An adversary who extracts bits from all carrier positions without the pad reads them in the wrong order — the result is noise before the OTP layer is even considered. Recovering the message requires both the position order (seed) and the OTP key material: two secrets, one pad.
 
-**What the dual-channel architecture provides:** Independent compromise resistance. Discovering channel α reveals nothing about channel β. Each channel requires its own pad. A coerced reveal of one pad yields one message with no indication a second exists — a natural duress/deniability structure.
+**What the homoglyph layer provides:** Covert channel existence deniability against automated scanning. There are no zero-width characters. No anomalous byte sequences. No statistical artifacts visible to standard DLP or Unicode scanners. Inactive carriers are reset to Latin, so the document contains no unexpected script mixing beyond what the payload positions require.
 
 **Detection vectors to be aware of:**
 - A purpose-built scanner checking every character's Unicode block can detect substitutions
@@ -177,21 +227,21 @@ The core encode/decode compiles to WASM via `wasm-pack`. The browser interface g
 ## The Dictionary
 
 ```javascript
-// Channel α — triad (Latin / Cyrillic / Greek)
+// Channel α — binary (Latin inactive / Cyrillic bit 0 / Greek bit 1)
 const alpha = {
-  lat: "KOMETAXPBHop",
-  cyr: "КОМЕТАХРВНор",
-  ell: "ΚΟΜΕΤΑΧΡΒΗορ",
+  lat: "KOMETAXPHo",   // inactive — carries no information
+  cyr: "КОМЕТАХРНо",  // active, bit 0
+  ell: "ΚΟΜΕΤΑΧΡΗο",  // active, bit 1
 };
 
-// Channel β — binary (Latin / Serbian Cyrillic)
+// Channel β — binary (Latin / Serbian Cyrillic) — planned
 const beta = {
-  lat: "IJ",
-  cyr: "ІЈ",
+  lat: "IJij",
+  cyr: "ІЈіј",
 };
 ```
 
-These twelve uppercase and two lowercase characters are the complete set satisfying strict three-way visual symmetry across Latin, Cyrillic, and Greek. Other scripts (Lisu, Coptic, Cherokee) contain partial matches but fail visual inspection at second glance. Serbian/Ukrainian Cyrillic extends the set for a binary-only channel. This asymmetry — the triad set and the binary set — is a feature, not a limitation: it produces two independent channels naturally.
+The α set satisfies strict three-way visual symmetry across Latin, Cyrillic, and Greek. Other scripts (Lisu, Coptic, Cherokee) contain partial matches but fail visual inspection at second glance. Serbian/Ukrainian Cyrillic extends the set with I and J equivalents for the planned binary β channel. The α and β sets are disjoint — they operate on different carrier characters with no overlap.
 
 ---
 
@@ -203,7 +253,7 @@ A much more elegant use of the beta channel, instead of carrying an independent 
 The I/J positions encode a random salt that was XORed into the alpha channel before embedding. Receiver extracts the salt from β first, then uses it to de-salt α before OTP decryption. This means even if someone has the α pad, they can't decode without also knowing the β encoding — adds a second factor naturally.
 
 **Carrier selection mask**
-β bits determine *which* α carrier positions are active vs. decoy. Some triad positions carry real payload trits, others are randomized noise. The β bitstream is the mask that tells the receiver which positions to read. An adversary seeing the α channel sees a valid-looking triad distribution with no obvious signal — because half the positions are intentional noise.
+β bits determine *which* α carrier positions are active vs. decoy. Some carrier positions carry real payload bits, others are randomized noise (Cyr or Greek chosen at random). The β bitstream is the mask that tells the receiver which α positions to read. An adversary seeing the α channel sees script substitutions distributed across the document with no obvious signal — because some positions are intentional noise. Note that the current implementation achieves a weaker version of this via the pad-seeded Fisher-Yates shuffle: inactive positions are reset to Latin rather than randomized, which is simpler but slightly more detectable.
 
 **Commitment / integrity check**
 β encodes a short checksum or HMAC over the α payload. Decoding succeeds only if β verifies. Detects document tampering, normalization damage, or copy-paste corruption — which is actually your biggest operational risk.
