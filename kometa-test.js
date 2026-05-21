@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────
-// kometa-smoke-test.js
+// kometa-test.js
 // Roundtrip test using KometaSession.
 // ─────────────────────────────────────────────
 
