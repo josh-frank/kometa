@@ -164,18 +164,6 @@ const fisherYates = (arr, rng) => {
 const selectionSeed = padBase64 =>
   Uint8Array.from(atob(padBase64), c => c.charCodeAt(0)).slice(0, SEED_BYTES);
 
-// ─────────────────────────────────────────────
-// File I/O helpers
-// ─────────────────────────────────────────────
-
-const readText = filePath => {
-  return fs.readFileSync(filePath, "utf8").trimEnd();
-};
-
-const writeText = (filePath, content) => {
-  fs.writeFileSync(filePath, content, "utf8");
-};
-
 // Best-effort pad destruction: overwrite with zeros, then delete.
 // NOTE: best-effort only — does not guarantee low-level disk erasure.
 // For stronger guarantees, use Rust + zeroize or shred(1).
@@ -205,9 +193,9 @@ const destroyPad = filePath => {
 // selection. All arguments are file paths.
 // Writes encoded output to <coverFile>.out
 const encode = (coverFile, messageFile, padFile) => {
-  const plaintext = readText(coverFile);
-  const message = readText(messageFile);
-  const pad = readText(padFile);
+  const plaintext = fs.readFileSync(coverFile, "utf8").trimEnd();
+  const message = fs.readFileSync(messageFile, "utf8").trimEnd();
+  const pad = fs.readFileSync(padFile, "utf8").trimEnd();
 
   const messageBytes = Uint8Array.from(
     message.split("").map(c => c.charCodeAt(0)),
@@ -253,7 +241,7 @@ const encode = (coverFile, messageFile, padFile) => {
   }
 
   const outPath = coverFile + ".out";
-  writeText(outPath, chars.join(""));
+  fs.writeFileSync(outPath, chars.join(""), "utf8"); // writeText(outPath, chars.join(""));
   console.log(`✓ Encoded → ${outPath}`);
   return outPath;
 };
@@ -262,8 +250,8 @@ const encode = (coverFile, messageFile, padFile) => {
 // Writes plaintext output to <encodedFile>.decoded
 // Pad is consumed (destroyed) after successful decode.
 const decode = (encodedFile, padFile) => {
-  const encoded = readText(encodedFile);
-  const pad = readText(padFile);
+  const encoded = fs.readFileSync(encodedFile, "utf8").trimEnd();
+  const pad = fs.readFileSync(padFile, "utf8").trimEnd();
 
   const alphaLookup = buildLookupTableFrom(dictionary.alpha);
 
@@ -306,7 +294,7 @@ const decode = (encodedFile, padFile) => {
     .join("");
 
   const outPath = encodedFile + ".decoded";
-  writeText(outPath, message);
+  fs.writeFileSync(outPath, message, "utf8");// writeText(outPath, message);
 
   // Consume the pad — best-effort destruction
   destroyPad(padFile);
@@ -325,8 +313,6 @@ module.exports = {
   makeRng,
   fisherYates,
   selectionSeed,
-  readText,
-  writeText,
   destroyPad,
   encode,
   decode,
