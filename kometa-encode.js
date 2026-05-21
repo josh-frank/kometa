@@ -191,8 +191,8 @@ const destroyPad = filePath => {
 
 // Encode message into cover text using OTP encryption + keyed carrier
 // selection. All arguments are file paths.
-// Writes encoded output to <coverFile>.out
-const encode = (coverFile, messageFile, padFile) => {
+// Writes encoded output to outputFile, or <coverFile>.out if omitted.
+const encode = (coverFile, messageFile, padFile, outputFile = null) => {
   const plaintext = fs.readFileSync(coverFile, "utf8").trimEnd();
   const message = fs.readFileSync(messageFile, "utf8").trimEnd();
   const pad = fs.readFileSync(padFile, "utf8").trimEnd();
@@ -240,16 +240,16 @@ const encode = (coverFile, messageFile, padFile) => {
         : dictionary.alpha.ell[info.index];
   }
 
-  const outPath = coverFile + ".out";
-  fs.writeFileSync(outPath, chars.join(""), "utf8"); // writeText(outPath, chars.join(""));
+  const outPath = outputFile ?? coverFile + ".out";
+  fs.writeFileSync(outPath, chars.join(""), "utf8");
   console.log(`✓ Encoded → ${outPath}`);
   return outPath;
 };
 
 // Decode a steganographic file back to the hidden message.
-// Writes plaintext output to <encodedFile>.decoded
+// Writes plaintext output to outputFile, or <encodedFile>.decoded if omitted.
 // Pad is consumed (destroyed) after successful decode.
-const decode = (encodedFile, padFile) => {
+const decode = (encodedFile, padFile, outputFile = null) => {
   const encoded = fs.readFileSync(encodedFile, "utf8").trimEnd();
   const pad = fs.readFileSync(padFile, "utf8").trimEnd();
 
@@ -293,8 +293,8 @@ const decode = (encodedFile, padFile) => {
     .map(b => String.fromCharCode(b))
     .join("");
 
-  const outPath = encodedFile + ".decoded";
-  fs.writeFileSync(outPath, message, "utf8");// writeText(outPath, message);
+  const outPath = outputFile ?? encodedFile + ".decoded";
+  fs.writeFileSync(outPath, message, "utf8");
 
   // Consume the pad — best-effort destruction
   destroyPad(padFile);

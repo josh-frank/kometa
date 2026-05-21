@@ -9,7 +9,6 @@
 // ─────────────────────────────────────────────
 
 const fs   = require("fs");
-const path = require("path");
 const {
   otpGenerate,
   destroyPad,
@@ -40,31 +39,13 @@ const generatePad = (padFile, messageFile = null) => {
 // Encode cover + message → output, using pad at padFile.
 // All paths are explicit — no suffix magic.
 const encode = (coverFile, messageFile, padFile, outputFile) => {
-  // Temporarily redirect encode's hardcoded .out output by writing
-  // to a predictable temp path, then moving to the caller's outputFile.
-  // This keeps kometa-encode.js untouched for now.
-  const tempOut = coverFile + ".out";
-  _encode(coverFile, messageFile, padFile);
-  if (outputFile && outputFile !== tempOut) {
-    fs.renameSync(tempOut, outputFile);
-    console.log(`✓ Output → ${outputFile}`);
-  }
-  return outputFile ?? tempOut;
+  return _encode(coverFile, messageFile, padFile, outputFile ?? coverFile + ".out");
 };
 
 // Decode encodedFile → outputFile, using pad at padFile.
-// Pad is destroyed after decode (same as kometa-encode behaviour).
-// All paths are explicit.
+// Pad is destroyed after decode. All paths are explicit.
 const decode = (encodedFile, padFile, outputFile) => {
-  // _decode hardcodes <encodedFile>.decoded — move after the fact.
-  const tempOut = encodedFile + ".decoded";
-  const message = _decode(encodedFile, padFile);
-  if (outputFile && outputFile !== tempOut) {
-    // _decode already wrote tempOut; move it to the caller's path.
-    if (fs.existsSync(tempOut)) fs.renameSync(tempOut, outputFile);
-    console.log(`✓ Output → ${outputFile}`);
-  }
-  return message;
+  return _decode(encodedFile, padFile, outputFile ?? encodedFile + ".decoded");
 };
 
 // Best-effort file destruction: overwrite with zeros, then unlink.
