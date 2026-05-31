@@ -120,6 +120,26 @@ node kometa.js decode encoded.txt correct-horse-battery-staple decoded.txt
 
 The encoded file (`encoded.txt`) will look identical to `cover.txt` when viewed normally, but contains your hidden message.
 
+### `kometa-cat`
+
+Use the `kometa-cat` utility to display flipped characters.
+
+**View a file:**
+```bash
+node kometa-cat.js encoded.txt
+```
+
+**Pipe from another command:**
+```bash
+cat cover.txt | node kometa-cat.js
+```
+
+#### Color Legend
+- **🔴 Red** = Cyrillic (bit 0)
+- **🟢 Green** = Greek (bit 1)
+- **🔵 Blue** = Latin carrier (inactive)
+- **⚪ Normal** = Other characters
+
 ---
 
 ## Implementation Details
