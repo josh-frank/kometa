@@ -34,6 +34,11 @@ const ALPHA = {
   ell: "ΚΟΜΕΤΑΧΡΗο",
 };
 
+const BETA = {
+  lat: "IJij",
+  cyr: "ІЈіј",
+};
+
 // ── KEY DERIVATION ────────────────────────────
 
 // Normalise cover: replace all homoglyph carriers with Latin equivalents.
