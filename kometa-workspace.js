@@ -1,31 +1,23 @@
 // ─────────────────────────────────────────────
 // kometa-workspace.js
 // File-system workspace for kometa encode/decode sessions.
-//
-// Wraps kometa-encode.js primitives with:
-//   - explicit, caller-controlled output paths
-//   - pad generation sized to a given message file
-//   - a thin session object for multi-step workflows
+// Supports both OTP (pad file) and password modes.
 // ─────────────────────────────────────────────
 
-const fs   = require("fs");
+const fs = require("fs");
 const {
   otpGenerate,
   destroyPad,
-  encode: _encode,
-  decode: _decode,
+  encode:               _encode,
+  decode:               _decode,
+  encodeWithPassword:   _encodeWithPassword,
+  decodeWithPassword:   _decodeWithPassword,
 } = require("./kometa-encode.js");
 
 // ─────────────────────────────────────────────
-// Standalone workspace functions
-//
-// Each function is usable independently — no session object required.
-// These are the building blocks the CLI calls directly.
+// Standalone workspace functions (OTP mode)
 // ─────────────────────────────────────────────
 
-// Generate a pad sized for a given message file and write it to padFile.
-// If messageFile is omitted, generates a 1 KB pad (enough for ~990 bytes
-// of plaintext after the seed region).
 const generatePad = (padFile, messageFile = null) => {
   const messageBytes = messageFile
     ? fs.statSync(messageFile).size
@@ -36,84 +28,99 @@ const generatePad = (padFile, messageFile = null) => {
   return padFile;
 };
 
-// Encode cover + message → output, using pad at padFile.
-// All paths are explicit — no suffix magic.
-const encode = (coverFile, messageFile, padFile, outputFile) => {
-  return _encode(coverFile, messageFile, padFile, outputFile ?? coverFile + ".out");
-};
+const encode = (coverFile, messageFile, padFile, outputFile) =>
+  _encode(coverFile, messageFile, padFile, outputFile ?? coverFile + ".out");
 
-// Decode encodedFile → outputFile, using pad at padFile.
-// Pad is destroyed after decode. All paths are explicit.
-const decode = (encodedFile, padFile, outputFile) => {
-  return _decode(encodedFile, padFile, outputFile ?? encodedFile + ".decoded");
-};
+const decode = (encodedFile, padFile, outputFile) =>
+  _decode(encodedFile, padFile, outputFile ?? encodedFile + ".decoded");
 
-// Best-effort file destruction: overwrite with zeros, then unlink.
-// Re-exported here so the CLI only needs to import from one place.
-// NOTE: best-effort only — does not guarantee low-level disk erasure.
-// For stronger guarantees use shred(1) or srm(1).
-const destroy = (filePath) => {
+const destroy = filePath => {
   destroyPad(filePath);
   console.log(`✓ Destroyed: ${filePath}`);
 };
 
 // ─────────────────────────────────────────────
+// Standalone workspace functions (password mode)
+// ─────────────────────────────────────────────
+
+const encodeWithPassword = (coverFile, messageFile, password, outputFile) =>
+  _encodeWithPassword(coverFile, messageFile, password, outputFile ?? coverFile + ".out");
+
+const decodeWithPassword = (encodedFile, password, outputFile) =>
+  _decodeWithPassword(encodedFile, password, outputFile ?? encodedFile + ".decoded");
+
+// ─────────────────────────────────────────────
 // KometaSession
 //
 // Thin stateful wrapper for multi-step workflows.
-// Holds pad material in memory for the lifetime of the session so
-// the caller never needs to re-read or re-write the pad between steps.
+// Supports both OTP and password modes via the same interface.
 //
-// Typical usage:
+// OTP mode:
+//   new KometaSession().generatePad("pad.txt", "secret.txt")
+//                      .encode("cover.txt", "secret.txt", "out.txt")
+//   new KometaSession().usePad("pad.txt")
+//                      .decode("out.txt", "decoded.txt")
 //
-//   const session = new KometaSession();
-//   session.generatePad("pad.txt", "secret.txt");
-//   session.encode("cover.txt", "secret.txt", "encoded.txt");
-//   // ... transmit encoded.txt ...
-//   session.decode("encoded.txt", "decoded.txt");   // pad destroyed on decode
+// Password mode:
+//   new KometaSession().usePassword("correct-horse-battery-staple")
+//                      .encode("cover.txt", "secret.txt", "out.txt")
+//   new KometaSession().usePassword("correct-horse-battery-staple")
+//                      .decode("out.txt", "decoded.txt")
 // ─────────────────────────────────────────────
 
 class KometaSession {
   constructor() {
-    this._padFile = null;
+    this._padFile  = null;
+    this._password = null;
   }
 
-  // Generate a pad and remember its path for subsequent encode/decode calls.
+  // ── OTP mode ──────────────────────────────
+
   generatePad(padFile, messageFile = null) {
     generatePad(padFile, messageFile);
     this._padFile = padFile;
     return this;
   }
 
-  // Load an existing pad file into the session.
   usePad(padFile) {
     if (!fs.existsSync(padFile))
       throw new Error(`Pad file not found: ${padFile}`);
-    this._padFile = padFile;
+    this._padFile  = padFile;
+    this._password = null;
     return this;
   }
 
-  // Encode cover + message → output using the session pad.
+  // ── Password mode ─────────────────────────
+
+  usePassword(password) {
+    if (!password || password.length === 0)
+      throw new Error("Password must not be empty");
+    this._password = password;
+    this._padFile  = null;
+    return this;
+  }
+
+  // ── Shared encode / decode ────────────────
+
   encode(coverFile, messageFile, outputFile) {
+    if (this._password)
+      return encodeWithPassword(coverFile, messageFile, this._password, outputFile);
     this._requirePad();
-    encode(coverFile, messageFile, this._padFile, outputFile);
-    return this;
+    return encode(coverFile, messageFile, this._padFile, outputFile);
   }
 
-  // Decode encodedFile → outputFile using the session pad.
-  // Pad is destroyed after decode; session pad reference is cleared.
   decode(encodedFile, outputFile) {
+    if (this._password)
+      return decodeWithPassword(encodedFile, this._password, outputFile);
     this._requirePad();
-    decode(encodedFile, this._padFile, outputFile);
-    this._padFile = null; // pad has been consumed
-    return this;
+    const result  = decode(encodedFile, this._padFile, outputFile);
+    this._padFile = null; // pad consumed
+    return result;
   }
 
   _requirePad() {
     if (!this._padFile)
-      throw new Error(
-        "No pad loaded. Call generatePad() or usePad() first.",
-      );
+      throw new Error("No pad loaded. Call generatePad(), usePad(), or usePassword() first.");
   }
 }
 
@@ -122,5 +129,7 @@ module.exports = {
   encode,
   decode,
   destroy,
+  encodeWithPassword,
+  decodeWithPassword,
   KometaSession,
 };
