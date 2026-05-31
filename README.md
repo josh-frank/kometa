@@ -98,24 +98,24 @@ Channel α carriers (K O M E T A X P H o) appear in typical English prose at rou
 
 **Encode a message into a cover text:**
 ```bash
-node kometa.js encode <cover.txt> <message.txt> <password> <output.txt>
+node kometa encode <cover.txt> <message.txt> <password> <output.txt>
 ```
 
 **Decode an encoded file:**
 ```bash
-node kometa.js decode <encoded.txt> <password> <output.txt>
+node kometa decode <encoded.txt> <password> <output.txt>
 ```
 
 ### Examples
 
 Encode a secret message into a cover document:
 ```bash
-node kometa.js encode cover.txt "stop spying on me" correct-horse-battery-staple encoded.txt
+node kometa encode cover.txt "stop spying on me" correct-horse-battery-staple encoded.txt
 ```
 
 Decode it back:
 ```bash
-node kometa.js decode encoded.txt correct-horse-battery-staple decoded.txt
+node kometa decode encoded.txt correct-horse-battery-staple decoded.txt
 ```
 
 The encoded file (`encoded.txt`) will look identical to `cover.txt` when viewed normally, but contains your hidden message.
@@ -126,12 +126,13 @@ Use the `kometa-cat` utility to display flipped characters.
 
 **View a file:**
 ```bash
-node kometa-cat.js encoded.txt
+node kometa-cat encoded.txt
 ```
 
 **Pipe from another command:**
 ```bash
-cat cover.txt | node kometa-cat.js
+cat cover.txt | node kometa-cat
+node kometa-cat file.txt | head -n 100   # first 100 lines
 ```
 
 #### Color Legend

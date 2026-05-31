@@ -10,7 +10,7 @@ const fs = require("fs");
 const ALPHA = {
   lat: "KOMETAXPHo",
   cyr: "КОМЕТАХРНо",
-  ell: "ΚΟΜΕТΑΧΡΗο",
+  ell: "ΚΟΜΕΤΑΧΡΗο",
 };
 
 const BETA = {
