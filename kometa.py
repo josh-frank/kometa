@@ -19,6 +19,12 @@ SALT_COVER_BYTES = 4096
 
 SCRYPT = dict(n=1<<17, r=8, p=1, dklen=None)  # dklen set per-call
 
+# ── DISTRIBUTION CONFIG ───────────────────────
+
+DEAD_ZONE_START  = 0.10   # fraction of carriers to exclude at head
+DEAD_ZONE_END    = 0.10   # fraction of carriers to exclude at tail
+DENSITY_BUCKETS  = 20     # granularity of carrier density profile
+
 ALPHA = dict(
     lat = "KOMETAXPHo",
     cyr = "КОМЕТАХРНо",
@@ -26,8 +32,8 @@ ALPHA = dict(
 )
 
 BETA = dict(
-    lat = "IJij",
-    cyr = "ІЈіј",
+    lat = "IJacepijxy",
+    cyr = "ІЈасеріјху",
 )
 
 # ── KEY DERIVATION ────────────────────────────
@@ -66,7 +72,7 @@ def _from_bits(bits: list[int]) -> bytes:
     length = (read_byte(0) << 8) | read_byte(8)
     return bytes(read_byte(16 + i * 8) for i in range(length))
 
-# xoshiro128** — must match JS implementation exactly
+# xoshiro128**
 def _make_rng(seed: bytes):
     s0, s1 = struct.unpack_from("<II", seed, 0)
     s0 |= 1; s1 |= 1
@@ -95,11 +101,80 @@ _LOOKUP = {ch: (s, i)
            for s, chars in ALPHA.items()
            for i, ch in enumerate(chars)}
 
+def _header_positions(positions: list[int], seed: bytes) -> list[int]:
+    """
+    Select 16 fixed carrier positions for the length header.
+    These are drawn from the dead-zone-excluded pool using a simple
+    shuffle — independent of message length, so decode can always
+    recover them without knowing n_bits first.
+    Header positions are excluded from body selection.
+    """
+    n  = len(positions)
+    lo = int(n * DEAD_ZONE_START)
+    hi = n - int(n * DEAD_ZONE_END)
+    eligible = positions[lo:hi]
+    if len(eligible) < 16:
+        raise ValueError(f"Cover too small: need at least 16 eligible carriers, got {len(eligible)}")
+    return _shuffle(eligible, _make_rng(seed))[:16]
+
+
+def _body_positions(positions: list[int], header_pos: list[int], n_bits: int, seed: bytes,
+                    n_buckets: int = DENSITY_BUCKETS) -> list[int]:
+    """
+    Select n_bits carrier positions for the message body using
+    density-matched bucket allocation.  Header positions are excluded.
+    Dead zones already applied (eligible pool passed in).
+    """
+    n  = len(positions)
+    lo = int(n * DEAD_ZONE_START)
+    hi = n - int(n * DEAD_ZONE_END)
+    header_set = set(header_pos)
+    eligible   = [p for p in positions[lo:hi] if p not in header_set]
+
+    if len(eligible) < n_bits:
+        raise ValueError(
+            f"Cover too small after dead-zone trim: "
+            f"need {n_bits} body carriers, have {len(eligible)} eligible "
+            f"(total {n}, margins {DEAD_ZONE_START:.0%}/{DEAD_ZONE_END:.0%})"
+        )
+
+    # ── density-matched bucket allocation ────
+    actual_buckets = min(n_buckets, len(eligible))
+    bucket_size    = len(eligible) / actual_buckets
+    buckets        = [
+        eligible[int(i * bucket_size) : int((i + 1) * bucket_size)]
+        for i in range(actual_buckets)
+    ]
+
+    raw   = [len(b) / len(eligible) * n_bits for b in buckets]
+    alloc = [int(r) for r in raw]
+    remainder = n_bits - sum(alloc)
+    fracs = sorted(range(actual_buckets), key=lambda i: -(raw[i] - alloc[i]))
+    for i in fracs[:remainder]:
+        alloc[i] += 1
+
+    rng      = _make_rng(seed)
+    selected = []
+    for bucket, k in zip(buckets, alloc):
+        chosen = _shuffle(bucket, rng)[:k]
+        selected.extend(chosen)
+
+    return selected
+
+
 def _embed(cover: str, bits: list[int], seed: bytes) -> str:
-    positions = [i for i, ch in enumerate(cover) if ch in _LOOKUP]
-    if len(positions) < len(bits):
-        raise ValueError(f"Cover too small: need {len(bits)} carriers, got {len(positions)}")
-    active = {p: bits[i] for i, p in enumerate(_shuffle(positions, _make_rng(seed))[:len(bits)])}
+    # bits layout: first 16 = length header, rest = body
+    header_bits = bits[:16]
+    body_bits   = bits[16:]
+
+    positions   = [i for i, ch in enumerate(cover) if ch in _LOOKUP]
+    hdr_pos     = _header_positions(positions, seed)
+    body_pos    = _body_positions(positions, hdr_pos, len(body_bits), seed)
+
+    active = {}
+    for p, b in zip(hdr_pos, header_bits):  active[p] = b
+    for p, b in zip(body_pos, body_bits):   active[p] = b
+
     out = []
     for i, ch in enumerate(cover):
         if ch not in _LOOKUP:
@@ -112,6 +187,7 @@ def _embed(cover: str, bits: list[int], seed: bytes) -> str:
             out.append(ALPHA["ell"][_LOOKUP[ch][1]])   # bit 1 → Greek
     return "".join(out)
 
+
 def _extract(encoded: str, seed: bytes) -> list[int]:
     positions, observed = [], {}
     for i, ch in enumerate(encoded):
@@ -119,11 +195,32 @@ def _extract(encoded: str, seed: bytes) -> list[int]:
         script, _ = _LOOKUP[ch]
         positions.append(i)
         if script != "lat": observed[i] = 0 if script == "cyr" else 1
-    shuffled = _shuffle(positions, _make_rng(seed))
-    def bit(i): return observed.get(shuffled[i], 0) if i < len(shuffled) else 0
-    def byte(offset): return sum(bit(offset + b) << (7 - b) for b in range(8))
-    payload_bytes = (byte(0) << 8) | byte(8)
-    return [bit(i) for i in range(16 + payload_bytes * 8)]
+
+    def read_bit(p): return observed.get(p, 0)
+    def read_byte(ps, offset):
+        return sum(read_bit(ps[offset + b]) << (7 - b) for b in range(8))
+
+    # ── recover header (length-independent) ──
+    hdr_pos       = _header_positions(positions, seed)
+    payload_bytes = (read_byte(hdr_pos, 0) << 8) | read_byte(hdr_pos, 8)
+    n_body_bits   = payload_bytes * 8
+
+    # ── recover body ─────────────────────────
+    # Cap n_body_bits at what the cover can physically hold —
+    # a wrong password produces a garbage length; we must not crash.
+    # _body_positions excludes header positions from the eligible pool,
+    # so the true max is (eligible - 16) not (eligible), hence * 8.
+    n  = len(positions)
+    lo = int(n * DEAD_ZONE_START)
+    hi = n - int(n * DEAD_ZONE_END)
+    hdr_set       = set(hdr_pos)
+    max_body_bits = len([p for p in positions[lo:hi] if p not in hdr_set])
+    n_body_bits   = min(n_body_bits, max(0, max_body_bits))
+
+    body_pos    = _body_positions(positions, hdr_pos, n_body_bits, seed)
+    header_bits = [read_bit(p) for p in hdr_pos]
+    body_bits   = [read_bit(p) for p in body_pos]
+    return header_bits + body_bits
 
 # ── ENCODE / DECODE ───────────────────────────
 
@@ -145,9 +242,14 @@ def encode(cover_file: str, message_arg: str, password: str, output_file: str):
 def decode(input_file: str, password: str, output_file: str):
     encoded = open(input_file, encoding="utf-8").read().rstrip()
     sys.stderr.write("⏳ Deriving keys…\n")
-    seed, keystream = derive_keys(password, encoded, BLOCK_SIZE * 8)
+    # Phase 1: bootstrap seed with minimal keystream — just enough to
+    # extract the embedded payload and learn the real message length.
+    seed, _ = derive_keys(password, encoded, BLOCK_SIZE)
     bits      = _extract(encoded, seed)
     encrypted = _from_bits(bits)
+    # Phase 2: re-derive keystream at the correct length and decrypt.
+    # encode() used len(message) so we must match that exactly.
+    _, keystream = derive_keys(password, encoded, len(encrypted))
     decrypted = _xor(encrypted, keystream)
     open(output_file, "wb").write(decrypted)
     sys.stderr.write(f"✓ Decoded → {output_file}\n")
