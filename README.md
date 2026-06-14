@@ -53,7 +53,7 @@ BETA = dict(
 The embedded bitstream has two parts with distinct selection logic:
 
 ```
-[ header: 16 bits ] [ body: N bits ]
+[ header: 16 bits ]                [ body: N bits ]
   └─ 2-byte big-endian length of     └─ XOR-encrypted message bytes
      the encrypted message
 ```
@@ -196,6 +196,25 @@ cat file.txt | python3 kometa-flag.py
 
 Flagged words are highlighted red. Exit code 1 if any mixed-script words are found. Useful for vetting a cover before use, or auditing an encoded output.
 
+### `kometa-grade`
+
+Assesses covertext quality:
+
+- **Carrier analysis** — count, density, per-1000-chars ratio
+- **Capacity calculation** — dead zones, header reservation, body bits
+- **Bucket distribution** — 20 buckets, even/uneven/very-uneven verdict
+- **Pre-existing scripts** — detects if cover already has Cyrillic/Greek
+- **Word-boundary risk** — 3-tier frequency lookup (top 2000 Google Trillion Word Corpus)
+- **Verdict tiers** — USABLE / MARGINAL / UNUSABLE with clear reasoning
+- **Exit codes** — 0 for USABLE, 1 for MARGINAL/UNUSABLE (scriptable)
+- **Default + verbose modes** — compact by default, detailed with `--verbose`
+- **Message-len checking** — optional `--message-len N` to validate specific payload sizes
+
+```
+python3 kometa-grade.py <file> --verbose --message-len 48
+cat file.txt | python3 kometa-grade.py
+```
+
 ---
 
 ## Implementation Details
@@ -299,12 +318,11 @@ The α set satisfies strict three-way visual symmetry across Latin, Cyrillic, an
 - Header/body carrier pool separation (length-independent decode bootstrap)
 - Wrong-password graceful noise output (no crash)
 - CLI: encode / decode
-- Utilities: kometa-cat, kometa-flag
+- Utilities: `kometa-cat`, `kometa-flag`, `kometa-grade`
 - Comprehensive test suite (8 tests)
 
 **Planned:**
 - Channel β (IJacepijxy — high-frequency lowercase carriers)
-- `kometa-grade` — cover quality assessment (carrier count, density profile, capacity after dead zones, spellcheck risk estimate)
 
 ---
 
