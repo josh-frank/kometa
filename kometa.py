@@ -33,7 +33,7 @@ ALPHA = dict(
 BETA = dict(
     lat = "KOMETAXPHo",
     cyr = "КОМЕТАХРНо",
-    ell = "ΚΟΜΕΤΑΧΡΗο",
+    # ell = "ΚΟΜΕΤΑΧΡΗο",
 )
 
 # ── KEY DERIVATION ────────────────────────────

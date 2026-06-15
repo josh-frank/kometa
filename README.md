@@ -6,20 +6,18 @@ A covert text steganography system that hides encrypted messages inside ordinary
 
 ## Concept
 
-Certain characters across Latin, Cyrillic, and Greek scripts are visually identical at the glyph level but occupy different Unicode code points:
+Certain characters across Latin and Cyrillic scripts are visually identical at the glyph level but occupy different Unicode code points:
 
 ```
-Latin    K  O  M  E  T  A  X  P  H  o
-Cyrillic К  О  М  Е  Т  А  Х  Р  Н  о
-Greek    Κ  Ο  Μ  Ε  Τ  Α  Χ  Ρ  Η  ο
+Latin    I  J  a  c  e  p  i  j  x  y
+Cyrillic І  Ј  а  с  е  р  і  ј  х  у
 ```
 
 A document containing these characters can have any of them silently substituted. The result is indistinguishable from the original to a human reader — and to most automated text processing.
 
 **Encoding scheme:**
 - **Latin** — carrier position is inactive; carries no information
-- **Cyrillic** — active carrier encoding bit **0**
-- **Greek** — active carrier encoding bit **1**
+- **Cyrillic** — active carrier encoding bit **1**
 
 Which positions are active and their read order is determined by a password-seeded shuffle (Fisher-Yates via xoshiro128** PRNG). Inactive positions are normalised to Latin.
 
@@ -33,9 +31,8 @@ Which positions are active and their read order is determined by a password-seed
 
 ```python
 ALPHA = dict(
-    lat = "KOMETAXPHo",   # inactive — normalised on encode
-    cyr = "КОМЕТАХРНо",  # active, bit 0
-    ell = "ΚΟΜΕΤΑΧΡΗο",  # active, bit 1
+    lat = "IJacepijxy",
+    cyr = "ІЈасеріјху",
 )
 ```
 
@@ -43,8 +40,9 @@ ALPHA = dict(
 
 ```python
 BETA = dict(
-    lat = "IJacepijxy",
-    cyr = "ІЈасеріјху",
+    lat = "KOMETAXPHo",   # inactive — normalised on encode
+    cyr = "КОМЕТАХРНо",  # active, bit 1
+    ell = "ΚΟΜΕΤΑΧΡΗο",  # active, bit 0 (unused)
 )
 ```
 
@@ -113,7 +111,7 @@ The 16-bit length header uses its own independently-shuffled carrier pool, selec
 
 ## Payload Capacity
 
-Channel α carriers (K O M E T A X P H o) appear in typical English prose at roughly 1 per 100 characters. Each carrier holds 1 bit. After dead zones (20% of carriers removed) and the 16-bit header:
+Channel α carriers (I J a c e p i j x y) appear in typical English prose at roughly 1 per 50 characters (higher frequency than the previous β). Each carrier holds 1 bit. After dead zones (20% of carriers removed) and the 16-bit header:
 
 | Document length | α carriers | Eligible (80%) | Usable payload |
 |---|---|---|---|
@@ -267,32 +265,32 @@ The test suite covers:
 
 ## Character Dictionary
 
-The α set satisfies strict three-way visual symmetry across Latin, Cyrillic, and Greek.
+The α set satisfies strict two-way visual symmetry across Latin and Cyrillic.
 
-| Latin | Cyrillic | Greek | Channel |
-|---|---|---|---|
-| K | К | Κ | α |
-| O | О | Ο | α |
-| M | М | Μ | α |
-| E | Е | Ε | α |
-| T | Т | Τ | α |
-| A | А | Α | α |
-| X | Х | Χ | α |
-| P | Р | Ρ | α |
-| H | Н | Η | α |
-| o | о | ο | α |
-| I | І | — | β (defined) |
-| J | Ј | — | β (defined) |
-| a | а | — | β (defined) |
-| c | с | — | β (defined) |
-| e | е | — | β (defined) |
-| p | р | — | β (defined) |
-| i | і | — | β (defined) |
-| j | ј | — | β (defined) |
-| x | х | — | β (defined) |
-| y | у | — | β (defined) |
+| Latin | Cyrillic | Channel |
+|---|---|---|
+| I | І | α |
+| J | Ј | α |
+| a | а | α |
+| c | с | α |
+| e | е | α |
+| p | р | α |
+| i | і | α |
+| j | ј | α |
+| x | х | α |
+| y | у | α |
+| K | К | β (defined) |
+| O | О | β (defined) |
+| M | М | β (defined) |
+| E | Е | β (defined) |
+| T | Т | β (defined) |
+| A | А | β (defined) |
+| X | Х | β (defined) |
+| P | Р | β (defined) |
+| H | Н | β (defined) |
+| o | о | β (defined) |
 
-β carriers are defined in `BETA` but not yet wired into the steganography layer. When implemented, β will significantly increase capacity for lowercase-heavy prose (common English words like "piece", "price", "cej" contain multiple β carriers).
+β carriers are defined in `BETA` but not yet wired into the steganography layer. When implemented, β will provide additional capacity for uppercase-heavy prose (technical text, acronyms, proper nouns). **The two channels are completely disjoint sets; no characters from one are present in the other.**
 
 ---
 
@@ -307,10 +305,10 @@ The α set satisfies strict three-way visual symmetry across Latin, Cyrillic, an
 
 ## Status
 
-**Current version:** Password-based steganography, density-matched distribution, dead-zone placement
+**Current version:** Password-based steganography with swapped channels (α = high-frequency lowercase), density-matched distribution, dead-zone placement
 
 **Implemented:**
-- Channel α (KOMETAXPHo / КОМЕТАХРНо / ΚΟΜΕΤΑΧΡΗο)
+- Channel α (IJacepijxy / ІЈасеріјху) — high-frequency lowercase carriers
 - Password-derived key generation via scrypt
 - XOR encryption with exact-length keystream
 - Dead-zone placement (head/tail exclusion)
@@ -319,10 +317,11 @@ The α set satisfies strict three-way visual symmetry across Latin, Cyrillic, an
 - Wrong-password graceful noise output (no crash)
 - CLI: encode / decode
 - Utilities: `kometa-cat`, `kometa-flag`, `kometa-grade`
-- Comprehensive test suite (8 tests)
+- Comprehensive test suite (11 tests)
 
 **Planned:**
-- Channel β (IJacepijxy — high-frequency lowercase carriers)
+- Channel β (KOMETAXPHo — uppercase/proper-noun carriers)
+- Nonce-based carrier position randomization (eliminate determinism)
 
 ---
 
