@@ -12,11 +12,11 @@ import sys, os, re
 # Cyrillic: U+0400–U+04FF
 # Greek:    U+0370–U+03FF
 
-ALPHA_CYR = "КОМЕТАХРНо"
-ALPHA_ELL = "ΚΟΜΕΤΑΧΡΗο"
+ALPHA_CYR = "ІЈасеріјху"
+ALPHA_LAT = "IJacepijxy"
 
-KNOWN_HOMOGLYPHS = re.compile(f"[{re.escape(ALPHA_CYR + ALPHA_ELL)}]")
-HOMOGLYPH_PATTERN = re.compile(r'[\u0400-\u04FF\u0370-\u03FF]')
+KNOWN_HOMOGLYPHS = re.compile(f"[{re.escape(ALPHA_CYR + ALPHA_LAT)}]")
+HOMOGLYPH_PATTERN = re.compile(r'[\u0400-\u04FF]')  # Cyrillic only now
 
 # ── DETECTION ────────────────────────────────
 
