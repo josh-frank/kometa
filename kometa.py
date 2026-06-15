@@ -26,14 +26,14 @@ DEAD_ZONE_END    = 0.10   # fraction of carriers to exclude at tail
 DENSITY_BUCKETS  = 20     # granularity of carrier density profile
 
 ALPHA = dict(
-    lat = "KOMETAXPHo",
-    cyr = "КОМЕТАХРНо",
-    ell = "ΚΟΜΕΤΑΧΡΗο",
+    lat = "IJacepijxy",
+    cyr = "ІЈасеріјху",
 )
 
 BETA = dict(
-    lat = "IJacepijxy",
-    cyr = "ІЈасеріјху",
+    lat = "KOMETAXPHo",
+    cyr = "КОМЕТАХРНо",
+    ell = "ΚΟΜΕΤΑΧΡΗο",
 )
 
 # ── KEY DERIVATION ────────────────────────────
@@ -41,8 +41,8 @@ BETA = dict(
 def _normalise(text: str) -> str:
     """Replace all homoglyph carriers with Latin equivalents."""
     table = {}
-    for i, (l, c, e) in enumerate(zip(ALPHA["lat"], ALPHA["cyr"], ALPHA["ell"])):
-        table[l] = i; table[c] = i; table[e] = i
+    for i, (l, c) in enumerate(zip(ALPHA["lat"], ALPHA["cyr"])):
+        table[l] = i; table[c] = i
     return "".join(ALPHA["lat"][table[ch]] if ch in table else ch for ch in text)
 
 def derive_keys(password: str, cover: str, message_len: int) -> tuple[bytes, bytes]:
@@ -164,6 +164,7 @@ def _body_positions(positions: list[int], header_pos: list[int], n_bits: int, se
 
 def _embed(cover: str, bits: list[int], seed: bytes) -> str:
     # bits layout: first 16 = length header, rest = body
+    # For 2-script ALPHA: lat=bit 0, cyr=bit 1
     header_bits = bits[:16]
     body_bits   = bits[16:]
 
@@ -182,9 +183,9 @@ def _embed(cover: str, bits: list[int], seed: bytes) -> str:
         elif i not in active:
             out.append(ALPHA["lat"][_LOOKUP[ch][1]])   # inactive → Latin
         elif active[i] == 0:
-            out.append(ALPHA["cyr"][_LOOKUP[ch][1]])   # bit 0 → Cyrillic
+            out.append(ALPHA["lat"][_LOOKUP[ch][1]])   # bit 0 → Latin
         else:
-            out.append(ALPHA["ell"][_LOOKUP[ch][1]])   # bit 1 → Greek
+            out.append(ALPHA["cyr"][_LOOKUP[ch][1]])   # bit 1 → Cyrillic
     return "".join(out)
 
 
@@ -194,7 +195,8 @@ def _extract(encoded: str, seed: bytes) -> list[int]:
         if ch not in _LOOKUP: continue
         script, _ = _LOOKUP[ch]
         positions.append(i)
-        if script != "lat": observed[i] = 0 if script == "cyr" else 1
+        # For 2-script: lat=0, cyr=1
+        if script == "cyr": observed[i] = 1
 
     def read_bit(p): return observed.get(p, 0)
     def read_byte(ps, offset):
