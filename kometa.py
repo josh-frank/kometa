@@ -25,25 +25,22 @@ DEAD_ZONE_START  = 0.10   # fraction of carriers to exclude at head
 DEAD_ZONE_END    = 0.10   # fraction of carriers to exclude at tail
 DENSITY_BUCKETS  = 20     # granularity of carrier density profile
 
-ALPHA = dict(
-    lat = "IJacepijxy",
-    cyr = "ІЈасеріјху",
-)
-
-BETA = dict(
-    lat = "KOMETAXPHo",
-    cyr = "КОМЕТАХРНо",
-    # ell = "ΚΟΜΕΤΑΧΡΗο",
+# Homoglyph pairs — positional: lat[n] is the visual twin of cyr[n].
+# Ordered by frequency/importance; mnemonic: KOMETA = same in Latin & Cyrillic.
+DICT = dict(
+    lat = "KOMETAPHIJXacepoijxy",
+    cyr = "КОМЕТАРНІЈХасероіјху",
 )
 
 # ── KEY DERIVATION ────────────────────────────
 
+# Build char → index lookup for normalisation (covers both scripts)
+_NORM = {ch: i for i, ch in enumerate(DICT["cyr"])}
+_NORM.update({ch: i for i, ch in enumerate(DICT["lat"])})
+
 def _normalise(text: str) -> str:
-    """Replace all homoglyph carriers with Latin equivalents."""
-    table = {}
-    for i, (l, c) in enumerate(zip(ALPHA["lat"], ALPHA["cyr"])):
-        table[l] = i; table[c] = i
-    return "".join(ALPHA["lat"][table[ch]] if ch in table else ch for ch in text)
+    """Replace all homoglyph carriers with their Latin equivalents."""
+    return "".join(DICT["lat"][_NORM[ch]] if ch in _NORM else ch for ch in text)
 
 def derive_keys(password: str, cover: str, message_len: int) -> tuple[bytes, bytes]:
     """Return (seed[8], keystream[n]) derived from password + cover."""
@@ -96,18 +93,19 @@ def _shuffle(arr: list, rng) -> list:
 
 # ── STEGANOGRAPHY ─────────────────────────────
 
-# Build char → (script, index) lookup for all three scripts
-_LOOKUP = {ch: (s, i)
-           for s, chars in ALPHA.items()
-           for i, ch in enumerate(chars)}
+# Build char → index lookup for all carriers (both scripts, flat)
+_LOOKUP = {}
+for _i, (_l, _c) in enumerate(zip(DICT["lat"], DICT["cyr"])):
+    _LOOKUP[_l] = ("lat", _i)
+    _LOOKUP[_c] = ("cyr", _i)
 
 def _header_positions(positions: list[int], seed: bytes) -> list[int]:
     """
     Select 16 fixed carrier positions for the length header.
-    These are drawn from the dead-zone-excluded pool using a simple
-    shuffle — independent of message length, so decode can always
-    recover them without knowing n_bits first.
-    Header positions are excluded from body selection.
+    Drawn from the dead-zone-excluded pool via a seeded shuffle —
+    independent of message length, so decode can always recover them
+    without knowing n_bits first. Header positions are excluded from
+    body selection.
     """
     n  = len(positions)
     lo = int(n * DEAD_ZONE_START)
@@ -117,13 +115,11 @@ def _header_positions(positions: list[int], seed: bytes) -> list[int]:
         raise ValueError(f"Cover too small: need at least 16 eligible carriers, got {len(eligible)}")
     return _shuffle(eligible, _make_rng(seed))[:16]
 
-
 def _body_positions(positions: list[int], header_pos: list[int], n_bits: int, seed: bytes,
                     n_buckets: int = DENSITY_BUCKETS) -> list[int]:
     """
     Select n_bits carrier positions for the message body using
-    density-matched bucket allocation.  Header positions are excluded.
-    Dead zones already applied (eligible pool passed in).
+    density-matched bucket allocation. Header positions are excluded.
     """
     n  = len(positions)
     lo = int(n * DEAD_ZONE_START)
@@ -161,42 +157,36 @@ def _body_positions(positions: list[int], header_pos: list[int], n_bits: int, se
 
     return selected
 
-
 def _embed(cover: str, bits: list[int], seed: bytes) -> str:
     # bits layout: first 16 = length header, rest = body
-    # For 2-script ALPHA: lat=bit 0, cyr=bit 1
+    # lat = bit 0 (inactive), cyr = bit 1 (active)
     header_bits = bits[:16]
     body_bits   = bits[16:]
 
-    positions   = [i for i, ch in enumerate(cover) if ch in _LOOKUP]
-    hdr_pos     = _header_positions(positions, seed)
-    body_pos    = _body_positions(positions, hdr_pos, len(body_bits), seed)
+    positions = [i for i, ch in enumerate(cover) if ch in _LOOKUP]
+    hdr_pos   = _header_positions(positions, seed)
+    body_pos  = _body_positions(positions, hdr_pos, len(body_bits), seed)
 
     active = {}
-    for p, b in zip(hdr_pos, header_bits):  active[p] = b
-    for p, b in zip(body_pos, body_bits):   active[p] = b
+    for p, b in zip(hdr_pos, header_bits): active[p] = b
+    for p, b in zip(body_pos, body_bits):  active[p] = b
 
     out = []
     for i, ch in enumerate(cover):
         if ch not in _LOOKUP:
             out.append(ch)
-        elif i not in active:
-            out.append(ALPHA["lat"][_LOOKUP[ch][1]])   # inactive → Latin
-        elif active[i] == 0:
-            out.append(ALPHA["lat"][_LOOKUP[ch][1]])   # bit 0 → Latin
         else:
-            out.append(ALPHA["cyr"][_LOOKUP[ch][1]])   # bit 1 → Cyrillic
+            idx = _LOOKUP[ch][1]
+            bit = active.get(i, 0)                  # inactive positions → bit 0
+            out.append(DICT["cyr"][idx] if bit else DICT["lat"][idx])
     return "".join(out)
-
 
 def _extract(encoded: str, seed: bytes) -> list[int]:
     positions, observed = [], {}
     for i, ch in enumerate(encoded):
         if ch not in _LOOKUP: continue
-        script, _ = _LOOKUP[ch]
         positions.append(i)
-        # For 2-script: lat=0, cyr=1
-        if script == "cyr": observed[i] = 1
+        if _LOOKUP[ch][0] == "cyr": observed[i] = 1  # cyr = bit 1, lat = bit 0
 
     def read_bit(p): return observed.get(p, 0)
     def read_byte(ps, offset):
@@ -208,10 +198,8 @@ def _extract(encoded: str, seed: bytes) -> list[int]:
     n_body_bits   = payload_bytes * 8
 
     # ── recover body ─────────────────────────
-    # Cap n_body_bits at what the cover can physically hold —
-    # a wrong password produces a garbage length; we must not crash.
-    # _body_positions excludes header positions from the eligible pool,
-    # so the true max is (eligible - 16) not (eligible), hence * 8.
+    # Cap n_body_bits at physical maximum — wrong password gives garbage
+    # length; we must not crash.
     n  = len(positions)
     lo = int(n * DEAD_ZONE_START)
     hi = n - int(n * DEAD_ZONE_END)
