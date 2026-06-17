@@ -40,15 +40,15 @@ All 20 pairs are positional: `lat[n]` is the visual twin of `cyr[n]`. This is th
 
 ### Payload Layout
 
-The embedded bitstream has two parts with distinct selection logic:
+The embedded bitstream has three parts with distinct selection logic:
 
 ```
-[ header: 16 bits ]                [ body: N bits ]
-  └─ 2-byte big-endian length of     └─ XOR-encrypted message bytes
-     the encrypted message
+[ nonce: 64 bits ]    [ header: 16 bits ]                [ body: N bits ]
+  └─ random per-       └─ 2-byte big-endian length of     └─ XOR-encrypted message bytes
+     encode session        the encrypted message
 ```
 
-**Header and body use separate carrier pools** so that decode can recover the length without knowing it in advance.
+**Each part uses its own independent carrier pool**, drawn in order so that decode can recover each without knowing what follows.
 
 ### Security Model
 
@@ -92,12 +92,17 @@ Rather than distributing active carriers uniformly across the eligible zone, kom
 DENSITY_BUCKETS = 20
 ```
 
-### Header / Body Split
+### Nonce / Header / Body Split
 
-The 16-bit length header uses its own independently-shuffled carrier pool, selected purely from the dead-zone-excluded positions using the seed alone. Body carriers are then drawn from the remaining eligible positions using density-matched bucket allocation. This split means:
+A 64-bit random nonce is generated at encode time and embedded in its own carrier pool, whose positions are determined by a nonce-free bootstrap seed derived from password + cover alone. This means:
 
-- Decode always recovers the header without needing to know the message length first
-- A wrong password produces a garbage length, which is capped to the physical maximum rather than crashing
+- The same cover, password, and message produce different output on every encode
+- Decode locates the nonce pool using the bootstrap seed, reads the nonce, then derives the real keys
+
+The 16-bit length header occupies a second pool (nonce positions excluded), and body carriers fill the remainder. This three-way split means:
+
+- Decode always recovers the nonce and header without knowing the message length
+- A wrong password produces a garbage nonce and garbage length, capped to the physical maximum rather than crashing
 
 ---
 
@@ -211,18 +216,20 @@ cat file.txt | python3 kometa-grade.py
 ### Key Derivation
 
 ```python
-salt      = sha256(normalise(cover[:4096]))
-keystream = scrypt(password, salt, N=2**17, r=8, p=1, dklen=keylen)
-seed      = keystream[:8]
+bootstrap_seed = scrypt(password, sha256(normalise(cover[:4096])))          # nonce-free
+nonce          = 64 carrier bits at positions chosen by bootstrap_seed
+salt           = sha256(normalise(cover[:4096]) + nonce)
+keystream      = scrypt(password, salt, N=2**17, r=8, p=1, dklen=keylen)
+seed           = keystream[:8]
 ```
 
-The cover is normalised before hashing (all homoglyphs → Latin equivalents), so the salt is stable regardless of whether the cover has been previously encoded.
+The bootstrap seed is derived without a nonce so decode can locate the nonce pool before knowing the nonce. The cover is normalised before hashing so the salt is stable regardless of prior encoding.
 
-Decode runs scrypt **twice**: once with a minimal keystream to extract the payload and learn its length, then again at the correct length to produce the matching keystream for decryption. This avoids the need to store the message length out-of-band.
+Decode runs scrypt **three times**: once (nonce-free) to find the nonce pool, once with the nonce to derive the real seed and extract the payload, and once more at the correct message length to produce the matching keystream for decryption.
 
 ### PRNG
 
-xoshiro128** seeded from the first 8 bytes of the key material. The same algorithm is used for all shuffles — header position selection, body position selection within each bucket, and Fisher-Yates ordering within each bucket.
+xoshiro128** seeded from the first 8 bytes of the key material. The same algorithm is used for all shuffles — nonce position selection, header position selection, body position selection within each bucket, and Fisher-Yates ordering within each bucket.
 
 ### Framing
 
@@ -247,7 +254,7 @@ The test suite covers:
 2. Cover integrity — same character length, whitespace preserved
 3. Correct password recovers the original message
 4. Wrong password produces noise (non-printable bytes, not the original message)
-5. Determinism — same inputs always produce identical output
+5. Nonce — same inputs produce different output; both decode correctly
 6. Password sensitivity — different password produces different encoding
 7. Round-trip with a different password
 8. Literal string argument round-trip
@@ -301,6 +308,7 @@ All pairs satisfy strict two-way visual symmetry across Latin and Cyrillic.
 - Dead-zone placement (head/tail exclusion)
 - Density-matched carrier distribution across 20 buckets
 - Header/body carrier pool separation (length-independent decode bootstrap)
+- Per-encode random nonce (same cover+password+message → different output each time)
 - Wrong-password graceful noise output (no crash)
 - CLI: encode / decode
 - Utilities: `kometa-cat`, `kometa-flag`, `kometa-grade`
