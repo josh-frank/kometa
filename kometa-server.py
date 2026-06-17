@@ -18,31 +18,38 @@ HTML = """<!doctype html>
   section { display: flex; align-items: center; gap: 12px; }
   textarea { flex: 1; min-height: 300px; font-family: monospace; }
   #download { display: none; }
+  #eye { cursor: pointer; user-select: none; background: none; border: none; font-size: 1.1em; padding: 0 2px; }
 </style>
 <body>
   <section>
     <input id="file" type="file" />
     <label for="password">Password:&nbsp;</label>
     <input id="password" type="password" />
+    <button id="eye" onmousedown="showpw(true)" onmouseup="showpw(false)" onmouseleave="showpw(false)">👁️</button>
     <button onclick="run()">Decode</button>
     <span id="status"></span>
   </section>
   <textarea id="out" readonly placeholder="Decoded output appears here..."></textarea>
   <button id="download" onclick="dl()">Download</button>
 <script>
+function showpw(show) {
+  document.getElementById('password').type = show ? 'text' : 'password';
+}
 async function run() {
   const file = document.getElementById('file').files[0];
   const password = document.getElementById('password').value;
   const status = document.getElementById('status');
   if (!file || !password) { status.textContent = 'Need file and password.'; return; }
   status.textContent = '⏳ Decoding…';
+  console.log('kometa: decoding', file.name);
   const body = new FormData();
   body.append('file', file);
   body.append('password', password);
   const res = await fetch('/decode', { method: 'POST', body });
   const j = await res.json();
-  if (j.error) { status.textContent = '✗ ' + j.error; return; }
+  if (j.error) { status.textContent = '✗ ' + j.error; console.error('kometa: error —', j.error); return; }
   status.textContent = '✓ Done';
+  console.log('kometa: done');
   document.getElementById('out').value = j.result;
   document.getElementById('download').style.display = 'inline';
 }
@@ -77,9 +84,12 @@ class H(BaseHTTPRequestHandler):
 
         try:
             encoded  = file_data if isinstance(file_data, str) else file_data.decode()
+            print("⏳ Decoding…", flush=True)
             result   = decode_text(encoded, password).decode(errors="replace")
+            print("✓ Done", flush=True)
             payload  = json.dumps({"result": result})
         except Exception as e:
+            print(f"✗ Error: {e}", flush=True)
             payload = json.dumps({"error": str(e)})
 
         data = payload.encode()

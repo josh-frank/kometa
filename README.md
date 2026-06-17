@@ -209,6 +209,17 @@ python3 kometa-grade.py <file> --verbose --message-len 48
 cat file.txt | python3 kometa-grade.py
 ```
 
+### `kometa-server`
+
+Localhost decode interface. Serves a browser UI on `127.0.0.1:8000` (port overridable). No dependencies beyond the standard library. The uploaded file is decoded entirely in memory — nothing is written to disk or temp directories.
+
+```bash
+python3 kometa-server.py
+python3 kometa-server.py 9000
+```
+
+Drop a file, enter the password, click Decode. Result appears in the textarea; a Download button saves it locally. Hold the 👁️ button to reveal the password field.
+
 ---
 
 ## Implementation Details
@@ -311,7 +322,7 @@ All pairs satisfy strict two-way visual symmetry across Latin and Cyrillic.
 - Per-encode random nonce (same cover+password+message → different output each time)
 - Wrong-password graceful noise output (no crash)
 - CLI: encode / decode
-- Utilities: `kometa-cat`, `kometa-flag`, `kometa-grade`
+- Utilities: `kometa-cat`, `kometa-flag`, `kometa-grade`, `kometa-server`
 - Test suite
 
 ---
