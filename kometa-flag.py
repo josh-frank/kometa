@@ -8,26 +8,20 @@
 #   cat file | python3 kometa-flag.py
 
 import sys, os, re
+sys.path.insert(0, os.path.dirname(__file__))
+from kometa import DICT
 
-# Cyrillic: U+0400–U+04FF
-# Greek:    U+0370–U+03FF
-
-ALPHA_CYR = "ІЈасеріјху"
-ALPHA_LAT = "IJacepijxy"
-
-KNOWN_HOMOGLYPHS = re.compile(f"[{re.escape(ALPHA_CYR + ALPHA_LAT)}]")
-HOMOGLYPH_PATTERN = re.compile(r'[\u0400-\u04FF]')  # Cyrillic only now
+# Derive carrier sets from single source of truth
+_CYR_CARRIERS = DICT["cyr"]
+_LAT_CARRIERS = DICT["lat"]
 
 # ── DETECTION ────────────────────────────────
 
 LATIN    = re.compile(r'[A-Za-z]')
-NONLATIN = re.compile(r'[\u0400-\u04FF\u0370-\u03FF]')  # Cyrillic + Greek blocks
+NONLATIN = re.compile(f"[{re.escape(_CYR_CARRIERS)}]")
 
 def is_mixed(word):
     return bool(LATIN.search(word) and NONLATIN.search(word))
-
-def has_homoglyphs(text):
-    return bool(HOMOGLYPH_PATTERN.search(text))
 
 def mixed_script_words(text):
     return [w for w in text.split()

@@ -6,20 +6,22 @@
 
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
-from kometa import ALPHA
+from kometa import DICT
 
-COLORS = dict(lat="\x1b[34m", cyr="\x1b[31m", ell="\x1b[32m", reset="\x1b[0m")
+COLORS = dict(lat="\x1b[34m", cyr="\x1b[31m", reset="\x1b[0m")
 
-LOOKUP = {ch: script for script, chars in ALPHA.items() for ch in chars}
+LOOKUP = {}
+for _i, (_l, _c) in enumerate(zip(DICT["lat"], DICT["cyr"])):
+    LOOKUP[_l] = "lat"
+    LOOKUP[_c] = "cyr"
 
 def _summary(text: str) -> str:
-    counts = {s: 0 for s in ALPHA}
+    counts = {"lat": 0, "cyr": 0}
     for ch in text:
         if ch in LOOKUP: counts[LOOKUP[ch]] += 1
     total = sum(counts.values())
     if not total: return "no carriers found"
     return (f"{COLORS['cyr']}cyr:{counts['cyr']}{COLORS['reset']}  "
-            f"{COLORS['ell']}ell:{counts['ell']}{COLORS['reset']}  "
             f"{COLORS['lat']}lat:{counts['lat']}{COLORS['reset']}  "
             f"total:{total}")
 

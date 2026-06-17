@@ -11,7 +11,7 @@
 
 import sys, os, re
 sys.path.insert(0, os.path.dirname(__file__))
-from kometa import ALPHA, DEAD_ZONE_START, DEAD_ZONE_END, DENSITY_BUCKETS
+from kometa import DICT, DEAD_ZONE_START, DEAD_ZONE_END, DENSITY_BUCKETS
 
 # ── FREQUENCY WORDLIST ────────────────────────
 # Top 2000 English words by Google Trillion Word Corpus frequency
@@ -133,9 +133,10 @@ attachment attachment connection connection connection relationship relationship
 
 # ── CARRIER LOOKUP ────────────────────────────
 
-_LOOKUP = {ch: (s, i)
-           for s, chars in ALPHA.items()
-           for i, ch in enumerate(chars)}
+_LOOKUP = {}
+for _i, (_l, _c) in enumerate(zip(DICT["lat"], DICT["cyr"])):
+    _LOOKUP[_l] = ("lat", _i)
+    _LOOKUP[_c] = ("cyr", _i)
 
 # ── ANALYSIS FUNCTIONS ────────────────────────
 
@@ -354,10 +355,10 @@ def _format_default(
     
     lines = [
         "",
-        f"kometa-grade: {carrier_count} α carriers found",
+        f"kometa-grade: {carrier_count} carriers found",
         "",
         f"  document length:     {total_chars:,} chars",
-        f"  α carriers found:     {carrier_count:>3}   (1 per {total_chars//max(1,carrier_count)} chars)",
+        f"  carriers found:       {carrier_count:>3}   (1 per {total_chars//max(1,carrier_count)} chars)",
         f"  dead zones (10/10%):  -{int(carrier_count * (DEAD_ZONE_START + DEAD_ZONE_END)):>2}    →  {eligible:>3} eligible",
         f"  header reserved:       -16   →  {max(0, eligible-16):>3} body bits available",
         f"  capacity:              {capacity:>2} bytes  ({max(0, eligible-16)} bits ÷ 8, floor)",
