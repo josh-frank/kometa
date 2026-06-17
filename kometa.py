@@ -261,9 +261,9 @@ def encode(cover_file: str, message_arg: str, password: str, output_file: str):
     open(output_file, "w", encoding="utf-8").write(output)
     sys.stderr.write(f"✓ Encoded → {output_file}\n")
 
-def decode(input_file: str, password: str, output_file: str):
-    encoded = open(input_file, encoding="utf-8").read().rstrip()
-    sys.stderr.write("⏳ Deriving keys…\n")
+def decode_text(encoded: str, password: str) -> bytes:
+    """Pure in-memory decode — no disk I/O. Returns decrypted payload as bytes."""
+    encoded = encoded.rstrip()
     # Phase 1: nonce-free bootstrap seed — only used to locate the nonce pool
     bs = _bootstrap_seed(password, encoded)
     nonce = _extract_nonce(encoded, bs)
@@ -273,7 +273,13 @@ def decode(input_file: str, password: str, output_file: str):
     encrypted = _from_bits(bits)
     # Phase 3: re-derive keystream at correct length
     _, keystream = derive_keys(password, encoded, len(encrypted), nonce)
-    decrypted = _xor(encrypted, keystream)
+    return _xor(encrypted, keystream)
+
+def decode(input_file: str, password: str, output_file: str):
+    """CLI wrapper — reads file, decodes in memory, writes result."""
+    sys.stderr.write("⏳ Deriving keys…\n")
+    encoded   = open(input_file, encoding="utf-8").read()
+    decrypted = decode_text(encoded, password)
     open(output_file, "wb").write(decrypted)
     sys.stderr.write(f"✓ Decoded → {output_file}\n")
 

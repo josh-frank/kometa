@@ -3,16 +3,16 @@
 # Localhost decode interface. No dependencies beyond the standard library.
 # Usage: python3 kometa-server.py [port]
 
-import sys, os, cgi, tempfile, json
+import sys, os, cgi, json
 sys.path.insert(0, os.path.dirname(__file__))
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from kometa import decode as kometa_decode
+from kometa import decode_text
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 
 HTML = """<!doctype html>
 <html>
-<meta charset="utf-8">
+<head><meta charset="utf-8"></head>
 <style>
   body { display: flex; flex-flow: column nowrap; gap: 8px; padding: 16px; font-family: sans-serif; }
   section { display: flex; align-items: center; gap: 12px; }
@@ -75,20 +75,12 @@ class H(BaseHTTPRequestHandler):
         password  = fields["password"][0] if isinstance(fields["password"][0], str) \
                     else fields["password"][0].decode()
 
-        with tempfile.NamedTemporaryFile(delete=False) as inf:
-            inf.write(file_data if isinstance(file_data, bytes) else file_data.encode())
-            in_path = inf.name
-        out_path = in_path + ".out"
-
         try:
-            kometa_decode(in_path, password, out_path)
-            result = open(out_path, "rb").read().decode(errors="replace")
-            payload = json.dumps({"result": result})
+            encoded  = file_data if isinstance(file_data, str) else file_data.decode()
+            result   = decode_text(encoded, password).decode(errors="replace")
+            payload  = json.dumps({"result": result})
         except Exception as e:
             payload = json.dumps({"error": str(e)})
-        finally:
-            os.unlink(in_path)
-            if os.path.exists(out_path): os.unlink(out_path)
 
         data = payload.encode()
         self.send_response(200)
