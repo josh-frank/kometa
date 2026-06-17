@@ -9,14 +9,16 @@ A covert text steganography system that hides encrypted messages inside ordinary
 Certain characters across Latin and Cyrillic scripts are visually identical at the glyph level but occupy different Unicode code points:
 
 ```
-Latin    I  J  a  c  e  p  i  j  x  y
-Cyrillic І  Ј  а  с  е  р  і  ј  х  у
+Latin    K  O  M  E  T  A  P  H  I  J  X  a  c  e  p  o  i  j  x  y
+Cyrillic К  О  М  Е  Т  А  Р  Н  І  Ј  Х  а  с  е  р  о  і  ј  х  у
 ```
+
+Ordered by frequency and importance. The name *kometa* is itself mnemonic — К О М Е Т А are identical in Russian and Latin, making the character set easy to reconstruct from memory.
 
 A document containing these characters can have any of them silently substituted. The result is indistinguishable from the original to a human reader — and to most automated text processing.
 
 **Encoding scheme:**
-- **Latin** — carrier position is inactive; carries no information
+- **Latin** — carrier position inactive; carries no information
 - **Cyrillic** — active carrier encoding bit **1**
 
 Which positions are active and their read order is determined by a password-seeded shuffle (Fisher-Yates via xoshiro128** PRNG). Inactive positions are normalised to Latin.
@@ -25,26 +27,16 @@ Which positions are active and their read order is determined by a password-seed
 
 ## Architecture
 
-### Character Sets
-
-**Channel α (implemented):**
+### Character Set
 
 ```python
-ALPHA = dict(
-    lat = "IJacepijxy",
-    cyr = "ІЈасеріјху",
+DICT = dict(
+    lat = "KOMETAPHIJXacepoijxy",
+    cyr = "КОМЕТАРНІЈХасероіјху",
 )
 ```
 
-**Channel β (defined, not yet wired into steganography layer):**
-
-```python
-BETA = dict(
-    lat = "KOMETAXPHo",   # inactive — normalised on encode
-    cyr = "КОМЕТАХРНо",  # active, bit 1
-    ell = "ΚΟΜΕΤΑΧΡΗο",  # active, bit 0 (unused)
-)
-```
+All 20 pairs are positional: `lat[n]` is the visual twin of `cyr[n]`. This is the single source of truth for all carrier logic across the suite.
 
 ### Payload Layout
 
@@ -56,7 +48,7 @@ The embedded bitstream has two parts with distinct selection logic:
      the encrypted message
 ```
 
-**Header and body use separate carrier pools** so that decode can recover the length without knowing it in advance (see *Carrier Selection* below).
+**Header and body use separate carrier pools** so that decode can recover the length without knowing it in advance.
 
 ### Security Model
 
@@ -70,7 +62,7 @@ The embedded bitstream has two parts with distinct selection logic:
    - Wrong password → random noise output, no error thrown
 
 3. **Steganography** — active carrier positions determined by seeded shuffle
-   - Bit values encoded via script selection (Cyrillic=0, Greek=1)
+   - Bit values encoded via script selection: Latin = 0, Cyrillic = 1
    - Carrier distribution designed to resist casual visual inspection (see *Distribution* below)
 
 **Detection vectors to be aware of:**
@@ -94,7 +86,7 @@ DEAD_ZONE_END   = 0.10
 
 ### Density-Matched Placement
 
-Rather than distributing active carriers uniformly across the eligible zone, kometa mirrors the document's own carrier density. The eligible carrier pool is divided into **20 buckets**; bits are allocated to each bucket in proportion to its size. The result: paragraphs that are naturally rich in KOMETA/PHo characters receive more encoded bits, sparse paragraphs receive fewer. Squiggle density after encoding tracks squiggle density before encoding.
+Rather than distributing active carriers uniformly across the eligible zone, kometa mirrors the document's own carrier density. The eligible carrier pool is divided into **20 buckets**; bits are allocated to each bucket in proportion to its size. The result: paragraphs naturally rich in carrier characters receive more encoded bits, sparse paragraphs receive fewer. Carrier density after encoding tracks carrier density before encoding.
 
 ```python
 DENSITY_BUCKETS = 20
@@ -111,16 +103,16 @@ The 16-bit length header uses its own independently-shuffled carrier pool, selec
 
 ## Payload Capacity
 
-Channel α carriers (I J a c e p i j x y) appear in typical English prose at roughly 1 per 50 characters (higher frequency than the previous β). Each carrier holds 1 bit. After dead zones (20% of carriers removed) and the 16-bit header:
+Carriers appear in typical English prose at roughly 1 per 25–30 characters across the full `DICT` set. Each carrier holds 1 bit. After dead zones (20% of carriers removed) and the 16-bit header:
 
-| Document length | α carriers | Eligible (80%) | Usable payload |
+| Document length | Carriers (est.) | Eligible (80%) | Usable payload |
 |---|---|---|---|
-| 1,000 chars | ~100 | ~80 | ~8 bytes |
-| 5,000 chars | ~500 | ~400 | ~48 bytes |
-| 20,000 chars | ~2,000 | ~1,600 | ~198 bytes |
-| 50,000 chars | ~5,000 | ~4,000 | ~498 bytes |
+| 1,000 chars | ~35 | ~28 | ~1 byte |
+| 5,000 chars | ~175 | ~140 | ~15 bytes |
+| 20,000 chars | ~700 | ~560 | ~68 bytes |
+| 50,000 chars | ~1,750 | ~1,400 | ~173 bytes |
 
-Carrier-dense covers (technical text, CSVs, proper-noun-heavy documents) will significantly exceed these estimates. Use `kometa-grade` (planned) to measure a specific cover before committing to it.
+Carrier-dense covers (technical text, proper-noun-heavy journalism, legal documents) will significantly exceed these estimates. Use `kometa-grade` to measure a specific cover before committing to it.
 
 ---
 
@@ -160,7 +152,7 @@ python3 kometa.py decode encoded.txt correct-horse-battery-staple decoded.txt
 python3 kometa.py encode data.csv "stop spying on me" password output.csv
 ```
 
-The output file is byte-for-byte the same length as the cover. Whitespace is preserved exactly.
+The output file is the same character length as the cover. Whitespace is preserved exactly.
 
 ---
 
@@ -176,16 +168,15 @@ cat file.txt | python3 kometa-cat.py
 ```
 
 **Color legend:**
-- 🔴 Red — Cyrillic (bit 0)
-- 🟢 Green — Greek (bit 1)
-- 🔵 Blue — Latin carrier (inactive)
+- 🔴 Red — Cyrillic (active, bit 1)
+- 🔵 Blue — Latin carrier (inactive, bit 0)
 - White — non-carrier character
 
-Summary counts (cyr / ell / lat / total) are written to stderr.
+Summary counts (cyr / lat / total) are written to stderr.
 
 ### `kometa-flag`
 
-Scans text for mixed-script words — words containing both Latin and non-Latin (Cyrillic or Greek) characters. Mixed-script words are the main spellchecker detection vector.
+Scans text for mixed-script words — words containing both Latin and Cyrillic carrier characters. Mixed-script words are the main spellchecker detection vector.
 
 ```bash
 python3 kometa-flag.py <file>
@@ -201,14 +192,14 @@ Assesses covertext quality:
 - **Carrier analysis** — count, density, per-1000-chars ratio
 - **Capacity calculation** — dead zones, header reservation, body bits
 - **Bucket distribution** — 20 buckets, even/uneven/very-uneven verdict
-- **Pre-existing scripts** — detects if cover already has Cyrillic/Greek
+- **Pre-existing scripts** — detects if cover already contains Cyrillic
 - **Word-boundary risk** — 3-tier frequency lookup (top 2000 Google Trillion Word Corpus)
 - **Verdict tiers** — USABLE / MARGINAL / UNUSABLE with clear reasoning
 - **Exit codes** — 0 for USABLE, 1 for MARGINAL/UNUSABLE (scriptable)
 - **Default + verbose modes** — compact by default, detailed with `--verbose`
 - **Message-len checking** — optional `--message-len N` to validate specific payload sizes
 
-```
+```bash
 python3 kometa-grade.py <file> --verbose --message-len 48
 cat file.txt | python3 kometa-grade.py
 ```
@@ -265,32 +256,30 @@ The test suite covers:
 
 ## Character Dictionary
 
-The α set satisfies strict two-way visual symmetry across Latin and Cyrillic.
+All pairs satisfy strict two-way visual symmetry across Latin and Cyrillic.
 
-| Latin | Cyrillic | Channel |
-|---|---|---|
-| I | І | α |
-| J | Ј | α |
-| a | а | α |
-| c | с | α |
-| e | е | α |
-| p | р | α |
-| i | і | α |
-| j | ј | α |
-| x | х | α |
-| y | у | α |
-| K | К | β (defined) |
-| O | О | β (defined) |
-| M | М | β (defined) |
-| E | Е | β (defined) |
-| T | Т | β (defined) |
-| A | А | β (defined) |
-| X | Х | β (defined) |
-| P | Р | β (defined) |
-| H | Н | β (defined) |
-| o | о | β (defined) |
-
-β carriers are defined in `BETA` but not yet wired into the steganography layer. When implemented, β will provide additional capacity for uppercase-heavy prose (technical text, acronyms, proper nouns). **The two channels are completely disjoint sets; no characters from one are present in the other.**
+| Latin | Cyrillic |
+|---|---|
+| K | К |
+| O | О |
+| M | М |
+| E | Е |
+| T | Т |
+| A | А |
+| P | Р |
+| H | Н |
+| I | І |
+| J | Ј |
+| X | Х |
+| a | а |
+| c | с |
+| e | е |
+| p | р |
+| o | о |
+| i | і |
+| j | ј |
+| x | х |
+| y | у |
 
 ---
 
@@ -305,10 +294,8 @@ The α set satisfies strict two-way visual symmetry across Latin and Cyrillic.
 
 ## Status
 
-**Current version:** Password-based steganography with swapped channels (α = high-frequency lowercase), density-matched distribution, dead-zone placement
-
 **Implemented:**
-- Channel α (IJacepijxy / ІЈасеріјху) — high-frequency lowercase carriers
+- Unified carrier set (20 Latin/Cyrillic pairs) — `DICT` is the single source of truth
 - Password-derived key generation via scrypt
 - XOR encryption with exact-length keystream
 - Dead-zone placement (head/tail exclusion)
@@ -317,27 +304,10 @@ The α set satisfies strict two-way visual symmetry across Latin and Cyrillic.
 - Wrong-password graceful noise output (no crash)
 - CLI: encode / decode
 - Utilities: `kometa-cat`, `kometa-flag`, `kometa-grade`
-- Comprehensive test suite (11 tests)
-
-**Planned:**
-- Channel β (KOMETAXPHo — uppercase/proper-noun carriers)
-- Nonce-based carrier position randomization (eliminate determinism)
+- Test suite
 
 ---
 
 ## License
 
 TBD
-
-<!-- 
-ALPHA = dict(
-    lat = "KOMETAXPHo",
-    cyr = "КОМЕТАХРНо",
-    ell = "ΚΟΜΕΤΑΧΡΗο",
-)
-
-BETA = dict(
-    lat = "IJacepijxy",
-    cyr = "ІЈасеріјху",
-)
- -->
