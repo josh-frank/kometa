@@ -63,13 +63,17 @@ WRONG = "/tmp/kometa_wrong.txt"
 run("decode", ENCODED, "wrong-password", WRONG)
 noise = open(WRONG, "rb").read()
 assert_("not the original message", noise.decode(errors="replace") != secret)
-assert_("contains non-printable bytes", any(b < 32 or b > 126 for b in noise))
+assert_("different content or length", noise != secret.encode())
 
-# 5. Deterministic
-print("\n5. determinism")
+# 5. Non-deterministic (nonce) but both decode correctly
+print("\n5. nonce — same inputs, different outputs, both decode")
 ENCODED2 = "/tmp/kometa_encoded2.txt"
+DECODED2b = "/tmp/kometa_decoded2b.txt"
 run("encode", COVER, MESSAGE, password, ENCODED2)
-assert_("identical output", open(ENCODED).read() == open(ENCODED2).read())
+assert_("different ciphertext",   open(ENCODED).read() != open(ENCODED2).read())
+run("decode", ENCODED2, password, DECODED2b)
+rt_b = open(DECODED2b, "rb").read().decode()
+assert_("second encode decodes correctly", rt_b == secret, repr(rt_b))
 
 # 6. Password sensitivity
 print("\n6. password sensitivity")

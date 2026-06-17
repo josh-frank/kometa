@@ -42,11 +42,20 @@ def _normalise(text: str) -> str:
     """Replace all homoglyph carriers with their Latin equivalents."""
     return "".join(DICT["lat"][_NORM[ch]] if ch in _NORM else ch for ch in text)
 
-def derive_keys(password: str, cover: str, message_len: int) -> tuple[bytes, bytes]:
-    """Return (seed[8], keystream[n]) derived from password + cover."""
+def _bootstrap_seed(password: str, cover: str) -> bytes:
+    """Derive a minimal seed without a nonce — used only to locate the nonce carrier pool."""
+    salt = hashlib.sha256(_normalise(cover)[:SALT_COVER_BYTES].encode()).digest()
+    maxmem = 128 * SCRYPT["n"] * SCRYPT["r"] * 2
+    key = hashlib.scrypt(password.encode(), salt=salt, dklen=SEED_BYTES,
+                         n=SCRYPT["n"], r=SCRYPT["r"], p=SCRYPT["p"], maxmem=maxmem)
+    return key
+
+
+def derive_keys(password: str, cover: str, message_len: int, nonce: bytes = b'') -> tuple[bytes, bytes]:
+    """Return (seed[8], keystream[n]) derived from password + cover + nonce."""
     keylen  = ((SEED_BYTES + message_len + BLOCK_SIZE - 1) // BLOCK_SIZE) * BLOCK_SIZE
-    salt    = hashlib.sha256(_normalise(cover)[:SALT_COVER_BYTES].encode()).digest()
-    maxmem  = 128 * SCRYPT["n"] * SCRYPT["r"] * 2  # 2× headroom; overrides platform default
+    salt    = hashlib.sha256(_normalise(cover)[:SALT_COVER_BYTES].encode() + nonce).digest()
+    maxmem  = 128 * SCRYPT["n"] * SCRYPT["r"] * 2
     key     = hashlib.scrypt(password.encode(), salt=salt, dklen=keylen,
                              n=SCRYPT["n"], r=SCRYPT["r"], p=SCRYPT["p"], maxmem=maxmem)
     return key[:SEED_BYTES], key[SEED_BYTES:]
@@ -99,7 +108,17 @@ for _i, (_l, _c) in enumerate(zip(DICT["lat"], DICT["cyr"])):
     _LOOKUP[_l] = ("lat", _i)
     _LOOKUP[_c] = ("cyr", _i)
 
-def _header_positions(positions: list[int], seed: bytes) -> list[int]:
+def _nonce_positions(positions: list[int], seed: bytes) -> list[int]:
+    """Select 64 fixed carrier positions for the nonce (drawn before header/body)."""
+    n  = len(positions)
+    lo = int(n * DEAD_ZONE_START)
+    hi = n - int(n * DEAD_ZONE_END)
+    eligible = positions[lo:hi]
+    if len(eligible) < 64:
+        raise ValueError(f"Cover too small: need at least 64 carriers for nonce, got {len(eligible)}")
+    return _shuffle(eligible, _make_rng(seed))[:64]
+
+def _header_positions(positions: list[int], seed: bytes, bootstrap_seed: bytes) -> list[int]:
     """
     Select 16 fixed carrier positions for the length header.
     Drawn from the dead-zone-excluded pool via a seeded shuffle —
@@ -110,22 +129,24 @@ def _header_positions(positions: list[int], seed: bytes) -> list[int]:
     n  = len(positions)
     lo = int(n * DEAD_ZONE_START)
     hi = n - int(n * DEAD_ZONE_END)
-    eligible = positions[lo:hi]
+    nonce_set = set(_nonce_positions(positions, bootstrap_seed))
+    eligible = [p for p in positions[lo:hi] if p not in nonce_set]
     if len(eligible) < 16:
         raise ValueError(f"Cover too small: need at least 16 eligible carriers, got {len(eligible)}")
     return _shuffle(eligible, _make_rng(seed))[:16]
 
 def _body_positions(positions: list[int], header_pos: list[int], n_bits: int, seed: bytes,
-                    n_buckets: int = DENSITY_BUCKETS) -> list[int]:
+                    bootstrap_seed: bytes, n_buckets: int = DENSITY_BUCKETS) -> list[int]:
     """
     Select n_bits carrier positions for the message body using
-    density-matched bucket allocation. Header positions are excluded.
+    density-matched bucket allocation. Header and nonce positions are excluded.
     """
     n  = len(positions)
     lo = int(n * DEAD_ZONE_START)
     hi = n - int(n * DEAD_ZONE_END)
+    nonce_set  = set(_nonce_positions(positions, bootstrap_seed))
     header_set = set(header_pos)
-    eligible   = [p for p in positions[lo:hi] if p not in header_set]
+    eligible   = [p for p in positions[lo:hi] if p not in nonce_set and p not in header_set]
 
     if len(eligible) < n_bits:
         raise ValueError(
@@ -157,19 +178,23 @@ def _body_positions(positions: list[int], header_pos: list[int], n_bits: int, se
 
     return selected
 
-def _embed(cover: str, bits: list[int], seed: bytes) -> str:
+def _embed(cover: str, bits: list[int], bootstrap_seed: bytes, seed: bytes, nonce: bytes) -> str:
     # bits layout: first 16 = length header, rest = body
     # lat = bit 0 (inactive), cyr = bit 1 (active)
     header_bits = bits[:16]
     body_bits   = bits[16:]
 
     positions = [i for i, ch in enumerate(cover) if ch in _LOOKUP]
-    hdr_pos   = _header_positions(positions, seed)
-    body_pos  = _body_positions(positions, hdr_pos, len(body_bits), seed)
+    nonce_pos = _nonce_positions(positions, bootstrap_seed)
+    hdr_pos   = _header_positions(positions, seed, bootstrap_seed)
+    body_pos  = _body_positions(positions, hdr_pos, len(body_bits), seed, bootstrap_seed)
+
+    nonce_bits = [(nonce[i // 8] >> (7 - i % 8)) & 1 for i in range(64)]
 
     active = {}
-    for p, b in zip(hdr_pos, header_bits): active[p] = b
-    for p, b in zip(body_pos, body_bits):  active[p] = b
+    for p, b in zip(nonce_pos, nonce_bits): active[p] = b
+    for p, b in zip(hdr_pos, header_bits):  active[p] = b
+    for p, b in zip(body_pos, body_bits):   active[p] = b
 
     out = []
     for i, ch in enumerate(cover):
@@ -181,33 +206,38 @@ def _embed(cover: str, bits: list[int], seed: bytes) -> str:
             out.append(DICT["cyr"][idx] if bit else DICT["lat"][idx])
     return "".join(out)
 
-def _extract(encoded: str, seed: bytes) -> list[int]:
+def _extract_nonce(encoded: str, bootstrap_seed: bytes) -> bytes:
+    """Read the 64-bit nonce from its fixed carrier pool using the bootstrap seed."""
+    positions = [i for i, ch in enumerate(encoded) if ch in _LOOKUP]
+    nonce_pos = _nonce_positions(positions, bootstrap_seed)
+    observed  = {i for i, ch in enumerate(encoded) if ch in _LOOKUP and _LOOKUP[ch][0] == "cyr"}
+    bits = [(1 if p in observed else 0) for p in nonce_pos]
+    return bytes(sum(bits[i*8+b] << (7-b) for b in range(8)) for i in range(8))
+
+def _extract(encoded: str, seed: bytes, bootstrap_seed: bytes) -> list[int]:
     positions, observed = [], {}
     for i, ch in enumerate(encoded):
         if ch not in _LOOKUP: continue
         positions.append(i)
-        if _LOOKUP[ch][0] == "cyr": observed[i] = 1  # cyr = bit 1, lat = bit 0
+        if _LOOKUP[ch][0] == "cyr": observed[i] = 1
 
     def read_bit(p): return observed.get(p, 0)
     def read_byte(ps, offset):
         return sum(read_bit(ps[offset + b]) << (7 - b) for b in range(8))
 
-    # ── recover header (length-independent) ──
-    hdr_pos       = _header_positions(positions, seed)
+    hdr_pos       = _header_positions(positions, seed, bootstrap_seed)
     payload_bytes = (read_byte(hdr_pos, 0) << 8) | read_byte(hdr_pos, 8)
     n_body_bits   = payload_bytes * 8
 
-    # ── recover body ─────────────────────────
-    # Cap n_body_bits at physical maximum — wrong password gives garbage
-    # length; we must not crash.
     n  = len(positions)
     lo = int(n * DEAD_ZONE_START)
     hi = n - int(n * DEAD_ZONE_END)
+    nonce_set     = set(_nonce_positions(positions, bootstrap_seed))
     hdr_set       = set(hdr_pos)
-    max_body_bits = len([p for p in positions[lo:hi] if p not in hdr_set])
+    max_body_bits = len([p for p in positions[lo:hi] if p not in nonce_set and p not in hdr_set])
     n_body_bits   = min(n_body_bits, max(0, max_body_bits))
 
-    body_pos    = _body_positions(positions, hdr_pos, n_body_bits, seed)
+    body_pos    = _body_positions(positions, hdr_pos, n_body_bits, seed, bootstrap_seed)
     header_bits = [read_bit(p) for p in hdr_pos]
     body_bits   = [read_bit(p) for p in body_pos]
     return header_bits + body_bits
@@ -222,24 +252,27 @@ def _read_or_literal(arg: str) -> bytes:
 def encode(cover_file: str, message_arg: str, password: str, output_file: str):
     cover   = open(cover_file, encoding="utf-8").read().rstrip()
     message = _read_or_literal(message_arg)
+    nonce   = os.urandom(8)
     sys.stderr.write("⏳ Deriving keys…\n")
-    seed, keystream = derive_keys(password, cover, len(message))
+    bs               = _bootstrap_seed(password, cover)
+    seed, keystream  = derive_keys(password, cover, len(message), nonce)
     encrypted = _xor(message, keystream)
-    output    = _embed(cover, _to_bits(encrypted), seed)
+    output    = _embed(cover, _to_bits(encrypted), bs, seed, nonce)
     open(output_file, "w", encoding="utf-8").write(output)
     sys.stderr.write(f"✓ Encoded → {output_file}\n")
 
 def decode(input_file: str, password: str, output_file: str):
     encoded = open(input_file, encoding="utf-8").read().rstrip()
     sys.stderr.write("⏳ Deriving keys…\n")
-    # Phase 1: bootstrap seed with minimal keystream — just enough to
-    # extract the embedded payload and learn the real message length.
-    seed, _ = derive_keys(password, encoded, BLOCK_SIZE)
-    bits      = _extract(encoded, seed)
+    # Phase 1: nonce-free bootstrap seed — only used to locate the nonce pool
+    bs = _bootstrap_seed(password, encoded)
+    nonce = _extract_nonce(encoded, bs)
+    # Phase 2: real seed with nonce folded in
+    seed, _ = derive_keys(password, encoded, BLOCK_SIZE, nonce)
+    bits      = _extract(encoded, seed, bs)
     encrypted = _from_bits(bits)
-    # Phase 2: re-derive keystream at the correct length and decrypt.
-    # encode() used len(message) so we must match that exactly.
-    _, keystream = derive_keys(password, encoded, len(encrypted))
+    # Phase 3: re-derive keystream at correct length
+    _, keystream = derive_keys(password, encoded, len(encrypted), nonce)
     decrypted = _xor(encrypted, keystream)
     open(output_file, "wb").write(decrypted)
     sys.stderr.write(f"✓ Decoded → {output_file}\n")
