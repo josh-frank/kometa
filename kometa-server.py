@@ -18,7 +18,6 @@ HTML = """<!doctype html>
   section { display: flex; align-items: center; gap: 12px; }
   textarea { flex: 1; min-height: 300px; font-family: monospace; }
   #download { display: none; }
-  #eye { cursor: pointer; user-select: none; background: none; border: none; font-size: 1.1em; padding: 0 2px; }
 </style>
 <body>
   <section>

@@ -9,7 +9,7 @@
 #   python3 kometa.py decode <input>  <password> <output>
 # ─────────────────────────────────────────────
 
-import sys, os, hashlib, struct
+import sys, os, hashlib, hmac, struct
 
 # ── CONSTANTS & CONFIG ────────────────────────
 
@@ -17,6 +17,8 @@ SEED_BYTES       = 8
 BLOCK_SIZE       = 64
 SALT_COVER_BYTES = 4096
 
+# Adjust memalloc to 1<<15 to improve performance.
+# Tradeoff is brute-force cost: compromise expensive but possible.
 SCRYPT = dict(n=1<<17, r=8, p=1, dklen=None)  # dklen set per-call
 
 # ── DISTRIBUTION CONFIG ───────────────────────
@@ -42,22 +44,28 @@ def _normalise(text: str) -> str:
     """Replace all homoglyph carriers with their Latin equivalents."""
     return "".join(DICT["lat"][_NORM[ch]] if ch in _NORM else ch for ch in text)
 
-def _bootstrap_seed(password: str, cover: str) -> bytes:
-    """Derive a minimal seed without a nonce — used only to locate the nonce carrier pool."""
-    salt = hashlib.sha256(_normalise(cover)[:SALT_COVER_BYTES].encode()).digest()
+def _derive_bootstrap(password: str, cover: str) -> bytes:
+    """One scrypt call — returns 64 bytes of base key material."""
+    salt   = hashlib.sha256(_normalise(cover)[:SALT_COVER_BYTES].encode()).digest()
     maxmem = 128 * SCRYPT["n"] * SCRYPT["r"] * 2
-    key = hashlib.scrypt(password.encode(), salt=salt, dklen=SEED_BYTES,
-                         n=SCRYPT["n"], r=SCRYPT["r"], p=SCRYPT["p"], maxmem=maxmem)
-    return key
+    return hashlib.scrypt(password.encode(), salt=salt, dklen=64,
+                          n=SCRYPT["n"], r=SCRYPT["r"], p=SCRYPT["p"], maxmem=maxmem)
 
+def _bootstrap_seed(base_key: bytes) -> bytes:
+    """Seed for nonce pool — first 8 bytes of base key, no nonce involved."""
+    return base_key[:SEED_BYTES]
 
-def derive_keys(password: str, cover: str, message_len: int, nonce: bytes = b'') -> tuple[bytes, bytes]:
-    """Return (seed[8], keystream[n]) derived from password + cover + nonce."""
-    keylen  = ((SEED_BYTES + message_len + BLOCK_SIZE - 1) // BLOCK_SIZE) * BLOCK_SIZE
-    salt    = hashlib.sha256(_normalise(cover)[:SALT_COVER_BYTES].encode() + nonce).digest()
-    maxmem  = 128 * SCRYPT["n"] * SCRYPT["r"] * 2
-    key     = hashlib.scrypt(password.encode(), salt=salt, dklen=keylen,
-                             n=SCRYPT["n"], r=SCRYPT["r"], p=SCRYPT["p"], maxmem=maxmem)
+def derive_keys(base_key: bytes, message_len: int, nonce: bytes) -> tuple[bytes, bytes]:
+    """Expand base key with nonce via HKDF-SHA256. Returns (seed[8], keystream[n])."""
+    keylen = ((SEED_BYTES + message_len + BLOCK_SIZE - 1) // BLOCK_SIZE) * BLOCK_SIZE
+    # HKDF-expand: cheap HMAC-based expansion, no second scrypt
+    prk  = hmac.digest(nonce, base_key, "sha256")  # extract step (nonce as salt)
+    out  = b""
+    prev = b""
+    for i in range(1, (keylen // 32) + 2):
+        prev = hmac.digest(prk, prev + i.to_bytes(1, "big"), "sha256")
+        out += prev
+    key = out[:keylen]
     return key[:SEED_BYTES], key[SEED_BYTES:]
 
 # ── PRIMITIVES ────────────────────────────────
@@ -254,8 +262,9 @@ def encode(cover_file: str, message_arg: str, password: str, output_file: str):
     message = _read_or_literal(message_arg)
     nonce   = os.urandom(8)
     sys.stderr.write("⏳ Deriving keys…\n")
-    bs               = _bootstrap_seed(password, cover)
-    seed, keystream  = derive_keys(password, cover, len(message), nonce)
+    base_key         = _derive_bootstrap(password, cover)
+    bs               = _bootstrap_seed(base_key)
+    seed, keystream  = derive_keys(base_key, len(message), nonce)
     encrypted = _xor(message, keystream)
     output    = _embed(cover, _to_bits(encrypted), bs, seed, nonce)
     open(output_file, "w", encoding="utf-8").write(output)
@@ -263,16 +272,14 @@ def encode(cover_file: str, message_arg: str, password: str, output_file: str):
 
 def decode_text(encoded: str, password: str) -> bytes:
     """Pure in-memory decode — no disk I/O. Returns decrypted payload as bytes."""
-    encoded = encoded.rstrip()
-    # Phase 1: nonce-free bootstrap seed — only used to locate the nonce pool
-    bs = _bootstrap_seed(password, encoded)
-    nonce = _extract_nonce(encoded, bs)
-    # Phase 2: real seed with nonce folded in
-    seed, _ = derive_keys(password, encoded, BLOCK_SIZE, nonce)
+    encoded  = encoded.rstrip()
+    base_key = _derive_bootstrap(password, encoded)
+    bs       = _bootstrap_seed(base_key)
+    nonce    = _extract_nonce(encoded, bs)
+    seed, _  = derive_keys(base_key, BLOCK_SIZE, nonce)
     bits      = _extract(encoded, seed, bs)
     encrypted = _from_bits(bits)
-    # Phase 3: re-derive keystream at correct length
-    _, keystream = derive_keys(password, encoded, len(encrypted), nonce)
+    _, keystream = derive_keys(base_key, len(encrypted), nonce)
     return _xor(encrypted, keystream)
 
 def decode(input_file: str, password: str, output_file: str):

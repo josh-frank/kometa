@@ -44,7 +44,7 @@ The embedded bitstream has three parts with distinct selection logic:
 
 ```
 [ nonce: 64 bits ]    [ header: 16 bits ]                [ body: N bits ]
-  └─ random per-       └─ 2-byte big-endian length of     └─ XOR-encrypted message bytes
+  └─ random per-        └─ 2-byte big-endian length of     └─ XOR-encrypted message bytes
      encode session        the encrypted message
 ```
 
@@ -330,3 +330,16 @@ All pairs satisfy strict two-way visual symmetry across Latin and Cyrillic.
 ## License
 
 TBD
+
+<!--
+ALPHA = dict(
+    lat = "IJacepijxy",
+    cyr = "ІЈасеріјху",
+)
+
+BETA = dict(
+    lat = "KOMETAXPHo",
+    cyr = "КОМЕТАХРНо",
+    ell = "ΚΟΜΕΤΑΧΡΗο",
+)
+-->
