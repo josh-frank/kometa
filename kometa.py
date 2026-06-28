@@ -5,11 +5,11 @@
 # Zero dependencies — standard library only.
 #
 # Usage:
-#   python3 kometa.py encode <cover> <message> <password> <output>
-#   python3 kometa.py decode <input>  <password> <output>
+#   python3 kometa.py encode <cover> <message> <output>
+#   python3 kometa.py decode <input> <output>
 # ─────────────────────────────────────────────
 
-import sys, os, hashlib, hmac, struct
+import sys, os, hashlib, hmac, struct, getpass
 
 # ── CONSTANTS & CONFIG ────────────────────────
 
@@ -292,16 +292,25 @@ def decode(input_file: str, password: str, output_file: str):
 
 # ── CLI ───────────────────────────────────────
 
+def _get_password() -> str:
+    """Read password from KOMETA_PASSWORD env var (testing) or a secure prompt (interactive)."""
+    env = os.environ.get("KOMETA_PASSWORD")
+    if env is not None:
+        return env
+    return getpass.getpass("Password: ")
+
 if __name__ == "__main__":
     args = sys.argv[1:]
-    if len(args) == 5 and args[0] == "encode":
-        encode(args[1], args[2], args[3], args[4])
-    elif len(args) == 4 and args[0] == "decode":
-        decode(args[1], args[2], args[3])
+    if len(args) == 4 and args[0] == "encode":
+        encode(args[1], args[2], _get_password(), args[3])
+    elif len(args) == 3 and args[0] == "decode":
+        decode(args[1], _get_password(), args[2])
     else:
         sys.stderr.write(
             "usage:\n"
-            "  python3 kometa.py encode <cover> <message> <password> <output>\n"
-            "  python3 kometa.py decode <input>  <password> <output>\n"
+            "  python3 kometa.py encode <cover> <message> <output>\n"
+            "  python3 kometa.py decode <input>  <output>\n"
+            "\n"
+            "Password prompted securely: never passed in argv\n"
         )
         sys.exit(1)

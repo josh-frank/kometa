@@ -23,6 +23,8 @@ A document containing these characters can have any of them silently substituted
 
 Which positions are active and their read order is determined by a password-seeded shuffle (Fisher-Yates via xoshiro128** PRNG). Inactive positions are normalised to Latin.
 
+**Secret capacity is roughly 1/200th cover size.** Ideal cover formats include: `['txt','csv','json','xml','yaml','toml']`
+
 ---
 
 ## Architecture
