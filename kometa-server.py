@@ -3,7 +3,7 @@
 # Localhost decode interface. No dependencies beyond the standard library.
 # Usage: python3 kometa-server.py [port]
 
-import sys, os, cgi, json
+import sys, os, json
 sys.path.insert(0, os.path.dirname(__file__))
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from kometa import decode_text
@@ -40,7 +40,6 @@ async function run() {
   const status = document.getElementById('status');
   if (!file || !password) { status.textContent = 'Need file and password.'; return; }
   status.textContent = '⏳ Decoding…';
-  console.log('kometa: decoding', file.name);
   const body = new FormData();
   body.append('file', file);
   body.append('password', password);
@@ -48,7 +47,6 @@ async function run() {
   const j = await res.json();
   if (j.error) { status.textContent = '✗ ' + j.error; console.error('kometa: error —', j.error); return; }
   status.textContent = '✓ Done';
-  console.log('kometa: done');
   document.getElementById('out').value = j.result;
   document.getElementById('download').style.display = 'inline';
 }
@@ -66,6 +64,40 @@ function dl() {
 </body>
 </html>"""
 
+
+def _parse_multipart(headers, rfile):
+    """Parse multipart/form-data without the deprecated cgi module."""
+    content_type = headers["Content-Type"]
+    # Extract boundary from e.g. "multipart/form-data; boundary=----XYZ"
+    boundary = None
+    for part in content_type.split(";"):
+        part = part.strip()
+        if part.startswith("boundary="):
+            boundary = part[len("boundary="):].strip().encode()
+            break
+    if not boundary:
+        raise ValueError("No boundary in Content-Type")
+
+    body = rfile.read(int(headers["Content-Length"]))
+    fields = {}
+    for chunk in body.split(b"--" + boundary):
+        if b"Content-Disposition" not in chunk:
+            continue
+        header_block, sep, value = chunk.partition(b"\r\n\r\n")
+        if not sep:
+            continue
+        value = value.rstrip(b"\r\n--")
+        for line in header_block.decode(errors="replace").splitlines():
+            if "Content-Disposition" not in line:
+                continue
+            for segment in line.split(";"):
+                segment = segment.strip()
+                if segment.startswith("name="):
+                    name = segment[5:].strip('"')
+                    fields[name] = value
+    return fields
+
+
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -74,19 +106,16 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(HTML.encode())
 
     def do_POST(self):
-        ctype, pdict = cgi.parse_header(self.headers["Content-Type"])
-        pdict["boundary"] = pdict["boundary"].encode()
-        fields = cgi.parse_multipart(self.rfile, pdict)
-        file_data = fields["file"][0]
-        password  = fields["password"][0] if isinstance(fields["password"][0], str) \
-                    else fields["password"][0].decode()
+        fields    = _parse_multipart(self.headers, self.rfile)
+        file_data = fields["file"]
+        password  = fields["password"].decode()
 
         try:
-            encoded  = file_data if isinstance(file_data, str) else file_data.decode()
+            encoded = file_data.decode()
             print("⏳ Decoding…", flush=True)
-            result   = decode_text(encoded, password).decode(errors="replace")
+            result  = decode_text(encoded, password).decode(errors="replace")
             print("✓ Done", flush=True)
-            payload  = json.dumps({"result": result})
+            payload = json.dumps({"result": result})
         except Exception as e:
             print(f"✗ Error: {e}", flush=True)
             payload = json.dumps({"error": str(e)})
