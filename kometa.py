@@ -30,8 +30,8 @@ DENSITY_BUCKETS  = 20     # granularity of carrier density profile
 # Homoglyph pairs — positional: lat[n] is the visual twin of cyr[n].
 # Ordered by frequency/importance; mnemonic: KOMETA = same in Latin & Cyrillic.
 DICT = dict(
-    lat = "KOMETAPHIJXacepoijxy",
-    cyr = "КОМЕТАРНІЈХасероіјху",
+    lat = "acepoijxyKOMETAPHIJX",
+    cyr = "асероіјхуКОМЕТАРНІЈХ",
 )
 
 # ── KEY DERIVATION ────────────────────────────
